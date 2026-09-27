@@ -1,0 +1,218 @@
+:root {
+  --hud-cyan: #3fe6ff;
+  --hud-white: #ffffff;
+  --hud-font: 'Chakra Petch', 'Segoe UI', system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #7fb6e8;
+  font-family: var(--hud-font);
+  user-select: none;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+}
+
+#loading {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+#hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  color: var(--hud-white);
+  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.55), 0 0 1px rgba(0, 0, 0, 0.8);
+}
+
+.hud-label { color: var(--hud-cyan); font-weight: 700; }
+.hud-big { font-size: 48px; font-weight: 700; line-height: 1; }
+
+.hud-speed {
+  position: absolute;
+  right: 32px;
+  bottom: 26px;
+  width: 260px;
+  height: 150px;
+}
+.hud-speed-readout {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.hud-speed-readout .hud-label { font-size: 34px; }
+.hud-lights { position: absolute; left: 0; bottom: 8px; width: 150px; height: 150px; }
+.hud-light {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.35), transparent 45%), var(--c);
+  opacity: 0.28;
+  filter: saturate(0.5);
+  transition: opacity 80ms linear;
+  box-shadow: inset 0 -3px 4px rgba(0, 0, 0, 0.35);
+}
+.hud-light.on {
+  opacity: 1;
+  filter: none;
+  box-shadow: inset 0 -3px 4px rgba(0, 0, 0, 0.25), 0 0 12px var(--c);
+}
+
+.hud-popup {
+  position: absolute;
+  top: 15%;
+  left: 50%;
+  transform: translateX(-50%) scale(0.8);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 250ms ease, transform 250ms ease;
+}
+.hud-popup .hud-label { color: var(--hud-white); }
+.hud-popup .hud-value { color: var(--hud-cyan); }
+.hud-popup.show { opacity: 1; transform: translateX(-50%) scale(1); }
+
+/* Top-left: lap + pickup slot. Top-right: race time. Bottom-left: position. */
+.hud-tl { position: absolute; left: 30px; top: 22px; }
+.hud-tr { position: absolute; right: 32px; top: 22px; text-align: right; }
+.hud-small { font-size: 26px; line-height: 1; letter-spacing: 0.02em; }
+.hud-num { font-size: 40px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.hud-sub { font-size: 18px; font-weight: 700; margin-top: 4px; opacity: 0.95; }
+.hud-slot {
+  margin-top: 12px;
+  width: 92px;
+  height: 92px;
+  border-radius: 18px;
+  background: linear-gradient(160deg, rgba(40, 44, 52, 0.85), rgba(10, 12, 16, 0.85));
+  border: 3px solid rgba(190, 200, 210, 0.85);
+  box-shadow: inset 0 0 0 3px rgba(0, 0, 0, 0.5), 0 3px 8px rgba(0, 0, 0, 0.4);
+  display: grid;
+  place-items: center;
+}
+.hud-slot-icon { width: 60px; height: 60px; background-size: contain; background-repeat: no-repeat; background-position: center; }
+.hud-bl { position: absolute; left: 30px; bottom: 24px; display: flex; align-items: baseline; }
+.hud-pos { font-size: 72px; font-weight: 700; line-height: 1; }
+.hud-pos-suf { font-size: 34px; align-self: flex-start; margin-top: 4px; margin-right: 10px; }
+.hud-pos-of { font-size: 40px; font-weight: 700; }
+
+.hud-count {
+  position: absolute;
+  top: 34%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(1.6);
+  font-size: 120px;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 180ms ease, transform 420ms cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+.hud-count.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+.hud-count.go { color: var(--hud-cyan); }
+
+.hud-banner {
+  position: absolute;
+  top: 26%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 22px;
+  border-radius: 8px;
+  background: rgba(200, 20, 20, 0.85);
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.hud-banner.show { opacity: 1; animation: hud-blink 0.5s steps(2) infinite; }
+@keyframes hud-blink { 50% { opacity: 0.35; } }
+
+.hud-results {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(5, 10, 20, 0.45);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 300ms;
+}
+.hud-results.show { opacity: 1; visibility: visible; }
+.hud-results-card {
+  min-width: min(620px, 92vw);
+  padding: 20px 26px;
+  border-radius: 14px;
+  background: rgba(12, 18, 30, 0.88);
+  border: 2px solid rgba(63, 230, 255, 0.5);
+}
+.hud-results-title { font-size: 34px; font-weight: 700; color: var(--hud-cyan); text-align: center; margin-bottom: 10px; }
+.hud-results table { width: 100%; border-collapse: collapse; font-size: 20px; font-variant-numeric: tabular-nums; }
+.hud-results th { color: var(--hud-cyan); font-size: 15px; text-align: left; padding: 4px 8px; border-bottom: 1px solid rgba(255, 255, 255, 0.2); }
+.hud-results td { padding: 6px 8px; }
+.hud-results tr.me td { color: #ffe14a; }
+.hud-results-foot { margin-top: 14px; text-align: center; font-size: 18px; opacity: 0.9; }
+
+.hud-hint {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(10, 20, 35, 0.45);
+  font-size: 15px;
+  white-space: nowrap;
+  transition: opacity 1.2s ease;
+}
+.hud-hint b { color: var(--hud-cyan); }
+.hud-hint.fade { opacity: 0; }
+
+.hud-debug {
+  display: none;
+  position: absolute;
+  left: 16px;
+  top: 16px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  font: 12px/1.45 ui-monospace, Consolas, monospace;
+  text-shadow: none;
+  white-space: pre;
+}
+
+@media (max-width: 700px) {
+  .hud-num { font-size: 28px; }
+  .hud-small { font-size: 18px; }
+  .hud-slot { width: 64px; height: 64px; }
+  .hud-pos { font-size: 48px; }
+  .hud-pos-of { font-size: 28px; }
+  .hud-count { font-size: 80px; }
+  .hud-big { font-size: 36px; }
+  .hud-speed { transform: scale(0.75); transform-origin: bottom right; right: 16px; }
+  .hud-hint { display: none; }
+}
