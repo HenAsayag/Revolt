@@ -1,11 +1,12 @@
 import * as THREE from 'three';
+import { QUALITY } from '../../core/quality';
 
 /**
  * Broadcast camera feeding the stadium's LED screens: alternates between a long-lens gantry
  * shot and a high chase shot. Rendered at low resolution every few frames.
  */
 export class TvFeed {
-  readonly target = new THREE.WebGLRenderTarget(384, 216, { samples: 0 });
+  readonly target = new THREE.WebGLRenderTarget(QUALITY.tvWidth, Math.round((QUALITY.tvWidth * 9) / 16), { samples: 0 });
   readonly camera = new THREE.PerspectiveCamera(30, 16 / 9, 0.3, 2500);
   /** Meshes that display the feed; hidden while the feed renders (no feedback loop). */
   screens: THREE.Object3D[] = [];
@@ -25,7 +26,7 @@ export class TvFeed {
 
   update(renderer: THREE.WebGLRenderer, scene: THREE.Scene, focus: THREE.Vector3, heading: THREE.Vector3, dt: number): void {
     this.clock += dt;
-    if (++this.frame % 4 !== 0) return;
+    if (++this.frame % QUALITY.tvEvery !== 0) return;
     const shot = Math.floor(this.clock / 7) % 2;
     if (shot === 0) {
       let best = this.gantries[0];

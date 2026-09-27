@@ -2,6 +2,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { CameraRig, type CameraTarget } from '../camera/CameraRig';
 import { Input, type DriveInput } from '../core/Input';
+import { QUALITY } from '../core/quality';
 import { createWorld, FIXED_DT } from '../physics/Physics';
 import { createSky, SKY, SunLight } from '../render/Environment';
 import { Hud } from '../ui/Hud';
@@ -77,8 +78,8 @@ export class Game {
   private readonly racerByCollider = new Map<number, Racer>();
 
   constructor(canvas: HTMLCanvasElement, hudRoot: HTMLElement, assets: StadiumAssets) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: QUALITY.antialias, powerPreference: 'high-performance' });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, QUALITY.pixelRatioCap));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -91,7 +92,7 @@ export class Game {
     this.scene.fog = new THREE.Fog(SKY.horizon.clone(), 300, 3200);
     this.sky = createSky();
     this.scene.add(this.sky);
-    this.sun = new SunLight(this.scene);
+    this.sun = new SunLight(this.scene, { mapSize: QUALITY.shadowMapSize });
 
     this.world = createWorld();
     this.stadium = buildStadium(this.scene, this.world, assets);
@@ -526,7 +527,7 @@ export class Game {
       `pos        ${c.pos.x.toFixed(1)}, ${c.pos.y.toFixed(2)}, ${c.pos.z.toFixed(1)}`,
       `track s    ${this.track.samples[Math.max(0, this.playerTrackIndex)].s.toFixed(1)} / ${this.track.length.toFixed(0)} m`,
       `race       ${this.race.phase}  lap ${this.playerProgress.lap}  next cp ${this.playerProgress.nextCp}/${this.race.checkpoints.length}  progress ${this.playerProgress.progress.toFixed(1)}`,
-      `camera     ${this.rig.mode}`,
+      `camera     ${this.rig.mode}   quality ${QUALITY.name}`,
       `draws      ${this.renderer.info.render.calls}  tris ${this.renderer.info.render.triangles}`,
     ].join('\n');
   }

@@ -18,6 +18,8 @@ export interface ActionInput {
   confirm: boolean;
 }
 
+import { isTouchDevice, TouchControls } from './TouchControls';
+
 export const neutralDrive = (): DriveInput => ({ throttle: 0, steer: 0, handbrake: false });
 
 const DEADZONE = 0.15;
@@ -39,8 +41,11 @@ export class Input {
   private down = new Set<string>();
   private pressed = new Set<string>();
   private padPrev: boolean[] = [];
+  /** On-screen controls, created automatically on touch devices. */
+  readonly touch: TouchControls | null;
 
   constructor(target: Window = window) {
+    this.touch = isTouchDevice() ? new TouchControls() : null;
     target.addEventListener('keydown', (e) => {
       if (GAME_KEYS.has(e.code)) e.preventDefault();
       if (!e.repeat) this.pressed.add(e.code);
@@ -82,6 +87,17 @@ export class Input {
       a.camera ||= edge(PAD.BACK);
       a.confirm ||= edge(PAD.START);
       this.padPrev = pad.buttons.map((b) => b.pressed);
+    }
+
+    const t = this.touch?.state;
+    if (t) {
+      if (!steer) steer = t.steer;
+      if (!throttle) throttle = (t.gas ? 1 : 0) - (t.brake ? 1 : 0);
+      handbrake ||= t.drift;
+      a.reset ||= t.reset;
+      a.camera ||= t.camera;
+      a.confirm ||= t.confirm;
+      t.reset = t.camera = t.confirm = false;
     }
 
     this.drive.throttle = Math.max(-1, Math.min(1, throttle));
