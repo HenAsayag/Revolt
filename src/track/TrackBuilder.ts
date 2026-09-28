@@ -10,6 +10,8 @@ import type { Track } from './Track';
 import type { TrackFeature } from './trackData';
 
 const BARRIER = { length: 1.15, gap: 0.05, height: 0.55, base: 0.42, top: 0.14, clearance: 0.22 } as const;
+/** Height of the barriers' (invisible) collision fence, m. */
+const FENCE_HEIGHT = 1.7;
 const RED = new THREE.Color('#d8262a');
 const WHITE = new THREE.Color('#f1f1ef');
 
@@ -160,10 +162,12 @@ export function buildTrack(scene: THREE.Object3D, world: RAPIER.World, track: Tr
       q.setFromUnitVectors(fwdZ, p1.clone().sub(p0).setY(0).normalize());
       mats.push(m.compose(mid, q, new THREE.Vector3(1, 1, len / BARRIER.length)).clone());
       cols.push((colour++ % 2 ? WHITE : RED).clone().multiplyScalar(0.94 + Math.random() * 0.08));
+      // The collider rises well above the visible barrier: an invisible fence, so a car that
+      // jumps near the edge lands back on the track instead of sailing out over the barriers.
       addStaticBox(
         world,
-        mid.clone().add(new THREE.Vector3(0, BARRIER.height / 2, 0)),
-        new THREE.Vector3(BARRIER.base / 2 - 0.04, BARRIER.height / 2, len / 2),
+        mid.clone().add(new THREE.Vector3(0, FENCE_HEIGHT / 2, 0)),
+        new THREE.Vector3(BARRIER.base / 2 - 0.04, FENCE_HEIGHT / 2, len / 2),
         q.clone(),
         { friction: 0.02, restitution: 0.05 }, // slide along, don't ping off
       );

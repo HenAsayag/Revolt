@@ -24,13 +24,22 @@ npm install
 npm run dev        # http://localhost:5180
 ```
 
-Other scripts: `npm run typecheck`, `npm run build`, `npm run sim` (headless handling tests),
-`npx tsx scripts/control.ts` (controllability), `npm run deploy:pages` (build → `gh-pages` branch).
+Other scripts: `npm run typecheck`, `npm run build`, `npm run sim` (headless handling numbers:
+acceleration, turning radius, drift, jumps, wall slides, ramps), `npm run deploy:pages` (build → `gh-pages` branch).
 URL options: `?touch=1` / `?touch=0` force the on-screen controls, `?quality=low|high`,
 `?track=tour|classic`.
 
 **Steering: Assisted** (default) follows the curve when you're not steering and eases you off the
-walls; **Pro** is raw.
+walls; **Pro** is raw. **Opponents: Invisible** (default) — the AI still race and rank, but you can't
+see or touch them and every item box is a lightning boost; **Visible** is the full pack with items.
+
+### Handling
+
+Kart-style and deterministic (`vehicle/ArcadeCar.ts`, tunables in `vehicle/CarConfig.ts`): the car is
+a capsule that always sits on the surface under it (it can't flip; loops and banks just work), the
+heading turns at a speed-dependent rate (1.75 m circle at walking pace, ~10 m at top speed), grip
+bleeds off sideways speed, walls are glanced along instead of stopping you. Hold **DRIFT** (Space /
+A) while steering at speed to slide; let go after a long drift for a mini-turbo.
 
 ## Controls
 
@@ -82,7 +91,7 @@ src/
   core/Input.ts           keyboard + gamepad → DriveInput / one-shot actions
   physics/Physics.ts      world creation, static collider helpers
   vehicle/CarConfig.ts    ALL handling tunables (SI units)
-  vehicle/RaycastCar.ts   raycast-suspension car on a Rapier rigid body
+  vehicle/ArcadeCar.ts    kart-style car: surface-aligned capsule, heading/speed/grip model, drift
   vehicle/CarVisual.ts    CarVisual interface (swap in GLTF later) + liveries
   vehicle/ProceduralBuggy.ts  procedural toy buggy mesh
   camera/CameraRig.ts     spring-damped chase cam + bumper cam

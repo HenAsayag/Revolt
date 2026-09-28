@@ -1,7 +1,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import type { Track } from '../track/Track';
-import type { RaycastCar } from '../vehicle/RaycastCar';
+import type { ArcadeCar } from '../vehicle/ArcadeCar';
 
 export type RacePhase = 'countdown' | 'racing' | 'finished';
 
@@ -11,7 +11,7 @@ export interface Checkpoint {
 }
 
 export interface RacerProgress {
-  readonly car: RaycastCar;
+  readonly car: ArcadeCar;
   readonly name: string;
   /** Track sample hint for projection (also "where am I"). */
   hint: number;
@@ -92,7 +92,7 @@ export class RaceManager {
     }
   }
 
-  addRacer(car: RaycastCar, name: string): RacerProgress {
+  addRacer(car: ArcadeCar, name: string): RacerProgress {
     const r: RacerProgress = {
       car, name, hint: -1, s: 0, started: false, lap: 1, nextCp: 0, lapStart: 0,
       lapTimes: [], finished: false, finishTime: 0, progress: 0, wrongWayFor: 0,
@@ -101,7 +101,7 @@ export class RaceManager {
     return r;
   }
 
-  progressOf(car: RaycastCar): RacerProgress {
+  progressOf(car: ArcadeCar): RacerProgress {
     return this.racers.find((r) => r.car === car)!;
   }
 

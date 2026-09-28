@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { PAD_GROUPS, PROJECTILE_GROUPS } from '../physics/groups';
 import type { Track } from '../track/Track';
-import type { RaycastCar } from '../vehicle/RaycastCar';
+import type { ArcadeCar } from '../vehicle/ArcadeCar';
 
 export type ItemKind = 'boost' | 'bomb' | 'oil' | 'pulse';
 export const ITEM_KINDS: ItemKind[] = ['boost', 'bomb', 'oil', 'pulse'];
@@ -165,7 +165,7 @@ const _i = new THREE.Vector3();
  * Everything items do once used: bombs in flight, oil on the ground, pulse rings, the flashes,
  * the "stunned" sparkle over hit cars, and the hits themselves (returned for HUD / score).
  */
-export class ItemWorld<T extends { car: RaycastCar }> {
+export class ItemWorld<T extends { car: ArcadeCar }> {
   private readonly bombs: Bomb<T>[] = [];
   private readonly slicks: Slick<T>[] = [];
   private readonly fx: Fx[] = [];
@@ -259,7 +259,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
       let boom = b.age > BOMB_FUSE || t.y < -5;
       if (!boom && b.age > 0.12) {
         for (const r of this.racers) {
-          if (r === b.owner && b.age < 0.8) continue;
+          if (r.car.ghost || (r === b.owner && b.age < 0.8)) continue;
           if (r.car.pos.distanceTo(b.mesh.position) < 0.55) boom = true;
         }
       }
@@ -270,7 +270,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
       this.burst(at, '#fff3b0', BOMB_RADIUS * 0.4, 0.2, 0.75);
       for (const r of this.racers) {
         const dist = r.car.pos.distanceTo(at);
-        if (dist > BOMB_RADIUS) continue;
+        if (dist > BOMB_RADIUS || r.car.ghost) continue;
         const f = 1 - (dist / BOMB_RADIUS) * 0.5;
         _d.subVectors(r.car.pos, at).setY(0);
         if (_d.lengthSq() < 1e-4) _d.copy(r.car.fwd);
@@ -333,7 +333,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
       }
       for (const [r, t] of s.cooldown) if (t - dt <= 0) s.cooldown.delete(r); else s.cooldown.set(r, t - dt);
       for (const r of this.racers) {
-        if (s.hitsLeft <= 0 || (r === s.owner && s.age < 1.5) || s.cooldown.has(r) || r.car.groundedCount === 0) continue;
+        if (r.car.ghost || s.hitsLeft <= 0 || (r === s.owner && s.age < 1.5) || s.cooldown.has(r) || r.car.groundedCount === 0) continue;
         _d.subVectors(r.car.pos, s.pos);
         const h = _d.dot(s.normal);
         if (h < -0.2 || h > 0.4) continue;
@@ -356,7 +356,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
     (ring.material as THREE.MeshBasicMaterial).side = THREE.DoubleSide;
     this.burst(at, '#3fe6ff', PULSE_RADIUS * 0.6, 0.35, 0.3);
     for (const r of this.racers) {
-      if (r === owner || r.car.pos.distanceTo(at) > PULSE_RADIUS) continue;
+      if (r === owner || r.car.ghost || r.car.pos.distanceTo(at) > PULSE_RADIUS) continue;
       this.stun(r, owner, 'pulse', { lift: 1.2, spin: 0, keep: 0.5, time: 1.3 });
     }
   }
@@ -371,10 +371,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
     _i.copy(c.up).multiplyScalar(o.lift * m);
     if (o.away) _i.addScaledVector(o.away, m);
     c.body.applyImpulse({ x: _i.x, y: _i.y, z: _i.z }, true);
-    if (o.spin) {
-      const j = o.spin * c.principalInertia.y;
-      c.body.applyTorqueImpulse({ x: c.up.x * j, y: c.up.y * j, z: c.up.z * j }, true);
-    }
+    if (o.spin) c.spin(o.spin);
     c.stunTime = Math.max(c.stunTime, o.time);
     this.hits.push({ victim, by, kind });
   }
@@ -447,7 +444,7 @@ function oilSplat(): THREE.BufferGeometry {
  * When an AI driver fires its item. `held` is how long it's been sitting on it: everything gets
  * used eventually, even without a perfect moment.
  */
-export function aiWantsToUse(kind: ItemKind, me: RaycastCar, others: RaycastCar[], track: Track, s: number, held: number): boolean {
+export function aiWantsToUse(kind: ItemKind, me: ArcadeCar, others: ArcadeCar[], track: Track, s: number, held: number): boolean {
   let ahead = 0, behind = 0, near = 0;
   for (const o of others) {
     if (o === me) continue;

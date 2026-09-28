@@ -1,183 +1,116 @@
 /**
- * All tunables for the raycast RC car, in SI units (metres, kg, seconds, newtons).
+ * All tunables for the arcade RC car, in SI units (metres, seconds, m/s, m/s², rad/s).
  *
  * Local car frame: +Z forward, +Y up, +X to the car's LEFT (so right = -X).
  * The car is toy-sized (~0.5 m long) so the stadium feels enormous.
+ *
+ * Handling is kart-style and fully deterministic: the game decides the heading, speed and grip
+ * directly (no tyre-force simulation), physics only resolves contacts. See ArcadeCar.
  */
 export interface CarConfig {
-  /** Chassis collider half-extents. */
-  chassisHalf: { x: number; y: number; z: number };
+  // --- Geometry (collision capsule + visuals).
+  /** Capsule radius (= ride height of the body centre) and half length of its straight part. */
+  radius: number;
+  halfLength: number;
   mass: number;
-  /** Centre of mass offset in local space (lower = harder to flip). */
-  comOffset: { x: number; y: number; z: number };
-  /** Multiplier on the box inertia; >1 makes the car rotate more lazily. */
-  inertiaScale: number;
-
   wheelRadius: number;
   wheelWidth: number;
   /** Half the distance between left/right wheel centres. */
   halfTrack: number;
-  /** Local Z of the front / rear axles. */
   frontAxleZ: number;
   rearAxleZ: number;
-  /** Local Y where suspension rays start. */
+  /** Local Y of the suspension mounts (visual wheel travel is measured from here). */
   mountY: number;
-
   suspensionRest: number;
-  springK: number;
-  damperCompression: number;
-  damperRebound: number;
-  /** Extra stiffness applied in the last part of the travel so hard landings don't bottom out as hard. */
-  bumpStopK: number;
-  bumpStopStart: number; // fraction of travel
-  /** Fraction of bump-stop force kept while the suspension extends (energy loss on landings). */
-  bumpStopReturn: number;
-  maxSuspensionForce: number;
-  /** Damper input is clamped to this compression speed, m/s. */
-  damperMaxVel: number;
-  /** Same for extension; higher so rebound damping can absorb hard landings. */
-  damperMaxReboundVel: number;
 
-  /** Friction coefficient (force limit = mu * load). */
-  gripFront: number;
-  gripRear: number;
-  /** 0..1 — how much of the lateral slip velocity each wheel tries to cancel per step. */
-  lateralStiffness: number;
-  /** Minimum fraction (squared) of grip kept for drive/brake when lateral grip is saturated. */
-  longGripReserve: number;
-  handbrakeRearGrip: number; // multiplier on rear grip while handbraking
-  /** Drift catch after handbrake release: slip angle (rad) where it starts, gain, yaw damping, max rad/s². */
-  slipAssistStart: number;
-  slipAssist: number;
-  slipAssistDamp: number;
-  slipAssistMax: number;
-  /** How far above the contact point tyre forces are applied (reduces body roll / tripping). */
-  tireForceLift: number;
-
-  maxSpeed: number; // m/s forward
+  // --- Speed.
+  maxSpeed: number; // m/s, top speed on the flat
   maxReverseSpeed: number;
-  driveForce: number; // total, N, split over driven wheels
-  brakeForce: number; // total, N
-  handbrakeForce: number; // total on rear, N
-  coastDrag: number; // N per m/s per wheel
-  airDrag: number; // N per (m/s)^2
-  downforce: number; // N per (m/s)^2 while grounded
+  /** Acceleration from standstill (m/s²); it fades toward top speed. */
+  accel: number;
+  brake: number; // m/s²
+  /** Rolling slow-down with no throttle, m/s². */
+  coast: number;
 
-  maxSteerLow: number; // radians at standstill
-  maxSteerHigh: number; // radians, floor at top speed
-  /** Slip angle added on top of the grip-limited steer angle. */
-  steerSlipAngle: number;
-  steerSpeed: number; // rad/s the steering rack moves at low speed
-  /** Cap on the turn rate full lock asks for, rad/s (keeps low-speed steering calm). */
-  maxYawRate: number;
-  /** Seconds from centre to full lock at standstill / at top speed (slower = finer control with digital input). */
-  steerTimeLow: number;
-  steerTimeHigh: number;
-  /** Stability control gains (1/s): pull yaw rate to the steering's request when not steering / when over-rotating. */
-  yawSettle: number;
-  yawLimit: number;
-  yawAssistMax: number; // rad/s²
-  steerReturnSpeed: number;
+  // --- Steering.
+  /** Turn rate at full lock (rad/s): at walking pace, and at top speed. */
+  turnLow: number;
+  turnHigh: number;
+  /** Below this speed the turn rate scales down to zero (you can't pirouette on the spot). */
+  turnFullSpeed: number;
+  /** How fast the steering input follows the stick/keys (1/s), and returns to centre. */
+  steerRise: number;
+  steerFall: number;
 
-  /** Corner assist: below this speed (m/s) it does nothing; above, holding a turn lifts
-   * this fraction of the power and brakes with up to this force (N). */
-  cornerFreeSpeed: number;
-  cornerLift: number;
-  cornerBrake: number;
+  // --- Grip.
+  /** Sideways velocity decay (1/s): normal, drifting, stunned. High = on rails. */
+  grip: number;
+  driftGrip: number;
+  stunGrip: number;
+  /** Share of the velocity that turns with the car each step (1 = pure kart, <1 = a little slide). */
+  carve: number;
 
-  /** Boost: drive-force multiplier and top-speed multiplier while boosting. */
-  boostDrive: number;
-  boostTopSpeed: number;
-  /** Drift boost: minimum drift (s), base boost (s), extra boost per drift second. */
+  // --- Drift (hold DRIFT + steer at speed): tighter turning, a slide, and a mini-turbo on release.
+  driftMinSpeed: number;
+  driftTurnBoost: number;
   driftBoostMinTime: number;
   driftBoostBase: number;
   driftBoostPerSecond: number;
-  /** Air attitude assist (PD gains on pitch/roll angles, rad & rad/s). */
-  airKp: number;
-  airKd: number;
-  airMaxAccel: number; // rad/s^2
-  /** 0..1 — how much the nose follows the flight path (1 = like a dart). */
-  airFollowTrajectory: number;
-  /** Max pitch/roll the player can dial in while airborne, radians. */
-  airPitchBias: number;
-  airRollBias: number;
-  airYawAccel: number; // rad/s^2 from steering
-  airAngularDamping: number;
-  groundAngularDamping: number;
+
+  // --- Boost.
+  boostTopSpeed: number; // multiplier
+  boostAccel: number; // m/s²
+
+  // --- Ground contact.
+  /** Press-down toward the surface while on it (m/s²; replaces gravity's normal part). */
+  stick: number;
+  /** Extra pull back to the surface when it's just below the wheels (bumps, steps). */
+  snap: number;
+  gravity: number;
+  /** Steering authority in the air (rad/s). */
+  airTurn: number;
 }
 
 export const DEFAULT_CAR: CarConfig = {
-  chassisHalf: { x: 0.12, y: 0.045, z: 0.23 },
+  radius: 0.13,
+  halfLength: 0.12,
   mass: 3.0,
-  comOffset: { x: 0, y: -0.035, z: -0.01 },
-  inertiaScale: 1.6,
-
   wheelRadius: 0.078,
   wheelWidth: 0.07,
   halfTrack: 0.155,
   frontAxleZ: 0.165,
   rearAxleZ: -0.165,
   mountY: -0.01,
-
   suspensionRest: 0.1,
-  springK: 190,
-  damperCompression: 7.5,
-  damperRebound: 17,
-  bumpStopK: 1600,
-  bumpStopStart: 0.72,
-  bumpStopReturn: 0.3,
-  maxSuspensionForce: 110,
-  damperMaxVel: 1.2,
-  damperMaxReboundVel: 5,
 
-  gripFront: 1.35,
-  gripRear: 1.3,
-  lateralStiffness: 0.45,
-  longGripReserve: 0.35,
-  handbrakeRearGrip: 0.62,
-  tireForceLift: 0.07,
-  slipAssistStart: 0.12,
-  slipAssist: 14,
-  slipAssistDamp: 4,
-  slipAssistMax: 30,
+  maxSpeed: 15.5, // ≈ 35 mph
+  maxReverseSpeed: 5,
+  accel: 13,
+  brake: 24,
+  coast: 2.2,
 
-  maxSpeed: 18.8, // asymptote; drag caps it near 16.7 m/s ≈ 37 mph
-  maxReverseSpeed: 6,
-  driveForce: 36,
-  brakeForce: 42,
-  handbrakeForce: 6,
-  coastDrag: 0.08,
-  airDrag: 0.012,
-  downforce: 0.018,
+  turnLow: 2.7,
+  turnHigh: 1.45,
+  turnFullSpeed: 3.5,
+  steerRise: 7,
+  steerFall: 11,
 
-  maxSteerLow: 0.52,
-  maxSteerHigh: 0.05,
-  steerSlipAngle: 0.07,
-  steerSpeed: 5,
-  maxYawRate: 2.0,
-  steerTimeLow: 0.08,
-  steerTimeHigh: 0.3,
-  yawSettle: 7,
-  yawLimit: 5,
-  yawAssistMax: 22,
-  steerReturnSpeed: 7,
-  cornerFreeSpeed: 9,
-  cornerLift: 0.8,
-  cornerBrake: 5,
+  grip: 12,
+  driftGrip: 2.2,
+  stunGrip: 1.2,
+  carve: 0.94,
 
-  boostDrive: 2.1,
-  boostTopSpeed: 1.32,
-  driftBoostMinTime: 0.7,
+  driftMinSpeed: 6,
+  driftTurnBoost: 1.3,
+  driftBoostMinTime: 0.6,
   driftBoostBase: 0.35,
-  driftBoostPerSecond: 0.35,
+  driftBoostPerSecond: 0.45,
 
-  airKp: 14,
-  airKd: 5,
-  airMaxAccel: 28,
-  airFollowTrajectory: 0.3,
-  airPitchBias: 0.35,
-  airRollBias: 0,
-  airYawAccel: 3,
-  airAngularDamping: 0.6,
-  groundAngularDamping: 1.2,
+  boostTopSpeed: 1.35,
+  boostAccel: 22,
+
+  stick: 18,
+  snap: 14,
+  gravity: 9.81,
+  airTurn: 1.2,
 };

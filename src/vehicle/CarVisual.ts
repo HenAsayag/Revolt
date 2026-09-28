@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { RaycastCar } from './RaycastCar';
+import type { ArcadeCar } from './ArcadeCar';
 
 /**
  * What the game needs from a car's look. The procedural buggy implements this today;
@@ -8,7 +8,7 @@ import type { RaycastCar } from './RaycastCar';
 export interface CarVisual {
   readonly root: THREE.Object3D;
   /** Called every rendered frame after `root` has been placed at the interpolated pose. */
-  update(car: RaycastCar, dt: number): void;
+  update(car: ArcadeCar, dt: number): void;
   dispose(): void;
 }
 

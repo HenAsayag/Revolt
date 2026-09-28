@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { CarConfig } from './CarConfig';
 import type { CarVisual, Livery } from './CarVisual';
-import type { RaycastCar } from './RaycastCar';
+import type { ArcadeCar } from './ArcadeCar';
 import { checkerTexture, numberDecalTexture, treadTexture } from '../render/textures';
 
 /** Give a geometry a flat per-vertex colour (linear), so differently coloured parts can share one mesh. */
@@ -83,6 +83,9 @@ function getShared(cfg: CarConfig) {
  * Toy RC buggy built from primitives: extruded body shell, glass cabin, rear wing,
  * balloon tyres with spoked rims, and a springy antenna with a red tip.
  */
+const _lean = new THREE.Quaternion();
+const _euler = new THREE.Euler();
+
 export class ProceduralBuggy implements CarVisual {
   readonly root = new THREE.Group();
   private readonly wheelPivots: THREE.Object3D[] = [];
@@ -177,8 +180,10 @@ export class ProceduralBuggy implements CarVisual {
     this.smoothSusp = this.wheelPivots.map(() => cfg.suspensionRest);
   }
 
-  update(car: RaycastCar, dt: number): void {
+  update(car: ArcadeCar, dt: number): void {
     const cfg = this.cfg;
+    // Body roll in turns (outward) and a little squat / dive under throttle and brakes.
+    this.root.quaternion.multiply(_lean.setFromEuler(_euler.set(car.pitchLean, 0, -car.lean)));
     const k = 1 - Math.exp(-dt * 40);
     car.wheels.forEach((w, i) => {
       this.smoothSusp[i] += (w.suspensionLength - this.smoothSusp[i]) * k;
@@ -191,7 +196,7 @@ export class ProceduralBuggy implements CarVisual {
   }
 
   /** Antenna whips opposite to the car's acceleration, like a thin steel whip on a real RC car. */
-  private updateAntenna(car: RaycastCar, dt: number): void {
+  private updateAntenna(car: ArcadeCar, dt: number): void {
     if (dt <= 0) return;
     const lv = car.body.linvel();
     const v = new THREE.Vector3(lv.x, lv.y, lv.z);

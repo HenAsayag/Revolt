@@ -5,6 +5,8 @@ export interface Settings {
   laps: number;
   /** Smart steering: helps follow the track and keeps you off the walls. */
   assist: boolean;
+  /** Invisible rivals race the same lap but can't be seen or touched (and don't use items). */
+  rivals: 'invisible' | 'visible';
   difficulty: Difficulty;
   items: boolean;
   /** 0..1 */
@@ -13,7 +15,7 @@ export interface Settings {
 }
 
 const KEY = 'bloomfield-rc-settings';
-const DEFAULTS: Settings = { track: 'tour', laps: 3, assist: true, difficulty: 'normal', items: true, music: 0.5, sfx: 0.9 };
+const DEFAULTS: Settings = { track: 'tour', laps: 3, assist: true, rivals: 'invisible', difficulty: 'normal', items: true, music: 0.5, sfx: 0.9 };
 
 export function loadSettings(): Settings {
   try {
@@ -23,6 +25,7 @@ export function loadSettings(): Settings {
       if (![1, 3, 5].includes(s.laps)) s.laps = 3;
       if (!['easy', 'normal', 'hard'].includes(s.difficulty)) s.difficulty = 'normal';
       if (s.track !== 'tour' && s.track !== 'classic') s.track = 'tour';
+      if (s.rivals !== 'invisible' && s.rivals !== 'visible') s.rivals = 'invisible';
       return s;
     }
   } catch {
@@ -74,7 +77,8 @@ export class Menu {
           ${seg('Track', 'track', [['tour', 'Stadium Tour'], ['classic', 'Pitch Circuit']])}
           ${seg('Laps', 'laps', [['1', '1'], ['3', '3'], ['5', '5']])}
           ${seg('Steering', 'assist', [['on', 'Assisted'], ['off', 'Pro']])}
-          ${seg('Rivals', 'difficulty', [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']])}
+          ${seg('Opponents', 'rivals', [['invisible', 'Invisible'], ['visible', 'Visible']])}
+          ${seg('AI level', 'difficulty', [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']])}
           ${seg('Pickups', 'items', [['on', 'On'], ['off', 'Off']])}
           ${slider('Music', 'music')}
           ${slider('Sound', 'sfx')}
@@ -192,6 +196,7 @@ export class Menu {
     const s = this.settings;
     if (opt === 'track') return s.track;
     if (opt === 'assist') return s.assist ? 'on' : 'off';
+    if (opt === 'rivals') return s.rivals;
     return opt === 'laps' ? String(s.laps) : opt === 'difficulty' ? s.difficulty : s.items ? 'on' : 'off';
   }
 
@@ -200,6 +205,7 @@ export class Menu {
     else if (opt === 'difficulty') this.settings.difficulty = v as Difficulty;
     else if (opt === 'items') this.settings.items = v === 'on';
     else if (opt === 'assist') this.settings.assist = v === 'on';
+    else if (opt === 'rivals') this.settings.rivals = v as Settings['rivals'];
     else if (opt === 'track') {
       if (this.settings.track === v) return;
       this.settings.track = v as Settings['track'];

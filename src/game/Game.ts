@@ -9,7 +9,7 @@ import { Hud } from '../ui/Hud';
 import { DEFAULT_CAR } from '../vehicle/CarConfig';
 import { LIVERIES, type CarVisual } from '../vehicle/CarVisual';
 import { ProceduralBuggy } from '../vehicle/ProceduralBuggy';
-import { RaycastCar } from '../vehicle/RaycastCar';
+import { ArcadeCar } from '../vehicle/ArcadeCar';
 import { buildStadium, type Stadium } from '../world/stadium/Stadium';
 import type { StadiumAssets } from '../world/stadium/StadiumModel';
 import { Track } from '../track/Track';
@@ -62,14 +62,13 @@ const v3 = (t: { x: number; y: number; z: number }) => new THREE.Vector3(t.x, t.
 const ITEM_ROLL_SECONDS = 0.9;
 const ITEM_HIT_SCORE = 150;
 const BOOST_PAD_SECONDS = 1.1;
-/** Guide-rail assist gains in the stand section (rad/s² per rad, per rad/s, cap). */
-const GUIDE_K = 22;
-const GUIDE_D = 4;
-const GUIDE_MAX = 45;
+/** Guide-rail assist in the stand section: heading correction (rad/s per rad of error, cap rad/s). */
+const GUIDE_RATE = 3;
+const GUIDE_MAX = 1.5;
 
 /** A car plus its look, its driver (AI or the player) and its race state. */
 interface Racer {
-  car: RaycastCar;
+  car: ArcadeCar;
   visual: CarVisual;
   /** Null for the player. */
   ai: AIDriver | null;
@@ -118,7 +117,7 @@ export class Game {
   private readonly checkpointMarkers = new THREE.Group();
 
   /** Test hook: when set, replaces the player's input (used for headless checks). */
-  autopilot: ((car: RaycastCar, t: number) => DriveInput) | null = null;
+  autopilot: ((car: ArcadeCar, t: number) => DriveInput) | null = null;
   simTime = 0;
   private accumulator = 0;
   private lastFrame = -1;
@@ -290,6 +289,7 @@ export class Game {
     document.body.classList.remove('paused');
     this.race.laps = DEMO_LAPS;
     this.difficulty = DIFFICULTY.normal;
+    this.setRivalsVisible(true); // the demo shows the whole field
     this.pickups.setEnabled(true);
     this.restartRace();
     this.race.skipCountdown();
@@ -308,6 +308,7 @@ export class Game {
     this.menu.hide();
     this.race.laps = st.laps;
     this.difficulty = DIFFICULTY[st.difficulty];
+    this.setRivalsVisible(st.rivals !== 'invisible');
     this.assistOn = st.assist;
     this.pickups.setEnabled(st.items);
     this.rig.distance = this.chase.distance;
@@ -315,6 +316,15 @@ export class Game {
     this.restartRace();
     this.demoDriver.reset();
     this.sound.setMusicMode('race');
+  }
+
+  /** Invisible rivals: hidden, untouchable, and out of the item game (they still race and rank). */
+  private setRivalsVisible(visible: boolean): void {
+    for (const r of this.racers) {
+      if (!r.ai) continue;
+      r.car.setGhost(!visible);
+      r.visual.root.visible = visible;
+    }
   }
 
   pause(): void {
@@ -371,7 +381,7 @@ export class Game {
   }
 
   private addRacer(liveryIndex: number, pos: THREE.Vector3, yaw: number): Racer {
-    const car = new RaycastCar(this.world, DEFAULT_CAR, pos, yaw);
+    const car = new ArcadeCar(this.world, DEFAULT_CAR, pos, yaw);
     const visual = new ProceduralBuggy(DEFAULT_CAR, LIVERIES[liveryIndex % LIVERIES.length]);
     this.scene.add(visual.root);
     const racer: Racer = {
@@ -451,6 +461,7 @@ export class Game {
     const cam = this.camera.position;
     for (const r of this.racers) {
       const c = r.car;
+      if (c.ghost) continue;
       const near = c.pos.distanceToSquared(cam) < 35 * 35;
       // Sliding (drift, handbrake, spin-out): smoke from the rear tyres.
       const slide = c.groundedCount >= 2 && c.speed > 3
@@ -537,7 +548,7 @@ export class Game {
     const focus = this.focusRacer();
     const cam = this.camera.position;
     const others = this.racers
-      .filter((r) => r !== focus)
+      .filter((r) => r !== focus && !r.car.ghost)
       .map((r) => ({ r, d: r.car.pos.distanceTo(cam) }))
       .sort((a, b) => a.d - b.d)
       .slice(0, 3);
@@ -903,7 +914,7 @@ export class Game {
   }
 
   /** Lateral spring-damper toward the centre line, capped (on top of the tyres' own grip). */
-  private railPull(car: RaycastCar, smp: { pos: THREE.Vector3; right: THREE.Vector3 }, dt: number): void {
+  private railPull(car: ArcadeCar, smp: { pos: THREE.Vector3; right: THREE.Vector3 }, dt: number): void {
     if (car.groundedCount < 2) return;
     const lat = _tmp.subVectors(car.pos, smp.pos).dot(smp.right);
     const v = car.body.linvel();
@@ -917,7 +928,7 @@ export class Game {
    * The raised deck in the stands turns tighter than full speed allows and has nowhere to run
    * wide, so it quietly caps the speed to what the next few metres can take.
    */
-  private deckGovernor(car: RaycastCar, s: number, dt: number): void {
+  private deckGovernor(car: ArcadeCar, s: number, dt: number): void {
     if (car.groundedCount < 2) return;
     let curv = 0;
     for (let d = 0; d < 6; d++) {
@@ -936,7 +947,7 @@ export class Game {
    * Toy-track guide rail for the narrow stand section: a gentle yaw torque that lines the car up
    * with the track so it can't end up wedged sideways on a 1 m-wide deck. Steering still works.
    */
-  private guideAlong(car: RaycastCar, smp: { tangent: THREE.Vector3 }, dt: number): void {
+  private guideAlong(car: ArcadeCar, smp: { tangent: THREE.Vector3 }, dt: number): void {
     if (car.groundedCount < 2) return;
     const up = car.up;
     const t = smp.tangent.clone().addScaledVector(up, -smp.tangent.dot(up)).normalize();
@@ -944,16 +955,13 @@ export class Game {
     // Signed angle from the car's heading to the track direction, about the car's up axis.
     const err = Math.atan2(new THREE.Vector3().crossVectors(f, t).dot(up), f.dot(t));
     if (Math.abs(err) > 2.2) return; // pointing backwards: let the player sort it out
-    const av = car.body.angvel();
-    const wUp = av.x * up.x + av.y * up.y + av.z * up.z;
-    const a = THREE.MathUtils.clamp(GUIDE_K * err - GUIDE_D * wUp, -GUIDE_MAX, GUIDE_MAX);
-    const I = 0.11; // ≈ car yaw inertia
-    const j = a * I * dt;
-    car.body.applyTorqueImpulse({ x: up.x * j, y: up.y * j, z: up.z * j }, true);
+    // Turn the heading toward the track (rad/s), capped so steering still wins.
+    car.nudgeYaw(THREE.MathUtils.clamp(GUIDE_RATE * err, -GUIDE_MAX, GUIDE_MAX));
+    void dt;
   }
 
   /** Bouncing down the aisle: each axle gets a kick as it passes a step edge. */
-  private stairHops(car: RaycastCar, s: number, stairStep: number[]): void {
+  private stairHops(car: ArcadeCar, s: number, stairStep: number[]): void {
     for (const b of this.trackBuild.bumps) {
       const span = this.track.forwardDistance(b.s0, b.s1);
       const axles = [car.cfg.frontAxleZ, car.cfg.rearAxleZ];
@@ -986,7 +994,7 @@ export class Game {
       if (!racer) return;
       const box = this.pickups.byCollider.get(h1) ?? this.pickups.byCollider.get(h2);
       if (box !== undefined) {
-        if (!racer.item && this.race.racing && this.pickups.take(box)) {
+        if (!racer.car.ghost && !racer.item && this.race.racing && this.pickups.take(box)) {
           this.giveItem(racer);
           if (racer === this.player) this.sfx('pickup');
         }
@@ -1020,7 +1028,9 @@ export class Game {
   }
 
   private giveItem(r: Racer): void {
-    r.item = rollItem(this.race.placeOf(r.progress), this.racers.length);
+    // With invisible rivals there's nobody to hit: every box is a lightning boost.
+    const targets = this.racers.some((o) => o !== r && !o.car.ghost);
+    r.item = targets ? rollItem(this.race.placeOf(r.progress), this.racers.length) : 'boost';
     r.itemRoll = ITEM_ROLL_SECONDS;
     r.itemHeld = 0;
   }
@@ -1049,7 +1059,7 @@ export class Game {
       }
       r.itemHeld += dt;
       // AI think about it a few times a second (not every frame, so they don't all fire at once).
-      const bot = r.ai !== null || (this.mode === 'menu' && r === this.player);
+      const bot = (r.ai !== null && !r.car.ghost) || (this.mode === 'menu' && r === this.player);
       if (bot && this.race.racing && !r.progress.finished && Math.random() < dt * 3) {
         const s = this.track.samples[Math.max(0, this.trackIndexOf(r))].s;
         if (aiWantsToUse(r.item, r.car, cars, this.track, s, r.itemHeld)) this.useItem(r);
@@ -1208,8 +1218,7 @@ export class Game {
       `fwd speed  ${c.forwardSpeed.toFixed(2)} m/s`,
       `steer      ${(c.steerAngle * 57.3).toFixed(1)}°`,
       `grounded   ${c.groundedCount}/4   air ${c.airTime.toFixed(2)}s  last ${c.lastAirTime.toFixed(2)}s`,
-      `load N     ${w.map((x) => x.load.toFixed(0).padStart(3)).join(' ')}`,
-      `slip m/s   ${w.map((x) => x.slip.toFixed(1).padStart(3)).join(' ')}`,
+      `slip       ${(c.slipAngle * 57.3).toFixed(0)}°   drift ${c.drifting ? c.driftTime.toFixed(1) + 's' : '—'}   boost ${c.boostTime.toFixed(1)}s   travel ${w[0].suspensionLength.toFixed(3)}`,
       `pos        ${c.pos.x.toFixed(1)}, ${c.pos.y.toFixed(2)}, ${c.pos.z.toFixed(1)}`,
       `track s    ${this.track.samples[Math.max(0, this.playerTrackIndex)].s.toFixed(1)} / ${this.track.length.toFixed(0)} m`,
       `race       ${this.race.phase}  lap ${this.playerProgress.lap}  next cp ${this.playerProgress.nextCp}/${this.race.checkpoints.length}  progress ${this.playerProgress.progress.toFixed(1)}`,

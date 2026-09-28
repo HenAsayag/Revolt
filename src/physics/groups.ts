@@ -15,6 +15,8 @@ export const GROUP = {
   GLIDE: 1 << 6,
   /** Thrown items (bombs): bounce off scenery and props, pass through cars (hits are proximity checks). */
   PROJECTILE: 1 << 7,
+  /** Invisible rivals: they drive on the world but touch nothing else (no cars, props or items). */
+  GHOST: 1 << 8,
 } as const;
 
 export const groups = (membership: number, filter: number) => (((membership & 0xffff) << 16) | (filter & 0xffff)) >>> 0;
@@ -25,13 +27,15 @@ export const groups = (membership: number, filter: number) => (((membership & 0x
  */
 export const CONE_GROUPS = groups(GROUP.CONE, 0xffff & ~GROUP.CAR);
 export const BALL_GROUPS = groups(GROUP.BALL, 0xffff & ~GROUP.CAR);
-/** Car chassis colliders. */
-export const CAR_GROUPS = groups(GROUP.CAR, 0xffff);
+/** Car bodies. */
+export const CAR_GROUPS = groups(GROUP.CAR, 0xffff & ~GROUP.GHOST);
+export const GHOST_GROUPS = groups(GROUP.GHOST, 0xffff & ~(GROUP.CAR | GROUP.GHOST | GROUP.CONE | GROUP.BALL | GROUP.PROJECTILE | GROUP.CAR_SENSOR));
 export const CAR_SENSOR_GROUPS = groups(GROUP.CAR_SENSOR, GROUP.CONE | GROUP.BALL);
-/** Boost pads and pickups: sensors that only notice car chassis. */
-export const PAD_GROUPS = groups(GROUP.PICKUP, GROUP.CAR);
+export const GHOST_SENSOR_GROUPS = groups(GROUP.CAR_SENSOR, 0);
+/** Boost pads and pickups: sensors that only notice car bodies (ghosts included; the game ignores their pickups). */
+export const PAD_GROUPS = groups(GROUP.PICKUP, GROUP.CAR | GROUP.GHOST);
 /** Glide slabs only exist for cars (props fall through to the real steps). */
-export const GLIDE_GROUPS = groups(GROUP.GLIDE, GROUP.CAR);
+export const GLIDE_GROUPS = groups(GROUP.GLIDE, GROUP.CAR | GROUP.GHOST);
 export const PROJECTILE_GROUPS = groups(GROUP.PROJECTILE, 0xffff & ~(GROUP.CAR | GROUP.CAR_SENSOR | GROUP.PICKUP | GROUP.GLIDE | GROUP.PROJECTILE));
-/** Suspension rays only see solid scenery (and other cars). */
-export const WHEEL_RAY_GROUPS = groups(GROUP.CAR, 0xffff & ~(GROUP.CONE | GROUP.BALL | GROUP.PICKUP | GROUP.PROJECTILE));
+/** A car's ground probe only sees solid scenery (not props, items or other cars). */
+export const GROUND_RAY_GROUPS = groups(GROUP.CAR, 0xffff & ~(GROUP.CONE | GROUP.BALL | GROUP.PICKUP | GROUP.PROJECTILE | GROUP.CAR | GROUP.GHOST | GROUP.CAR_SENSOR));

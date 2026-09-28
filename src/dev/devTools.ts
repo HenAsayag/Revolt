@@ -2,13 +2,13 @@ import * as THREE from 'three';
 import type { DriveInput } from '../core/Input';
 import { AIDriver } from '../race/AIDriver';
 import type { Game } from '../game/Game';
-import type { RaycastCar } from '../vehicle/RaycastCar';
+import type { ArcadeCar } from '../vehicle/ArcadeCar';
 
 /**
  * Dev-only helpers on `window.__test` (headless lap checks from the console / automation).
  * The pilot is a simple pure-pursuit driver along the spline — a stand-in until the phase-6 AI.
  */
-const TEST = { track: 'tour' as const, laps: 3, assist: false, difficulty: 'normal' as const, items: true, music: 0, sfx: 0 };
+const TEST = { track: 'tour' as const, laps: 3, assist: false, rivals: 'visible' as const, difficulty: 'normal' as const, items: true, music: 0, sfx: 0 };
 
 export function installDevTools(game: Game): void {
   const track = game.track;
@@ -20,7 +20,7 @@ export function installDevTools(game: Game): void {
   };
 
   /** `digital`: steer like a keyboard player (full left / nothing / full right). */
-  const pilot = (maxV = 19, grip = 12, digital = false) => (car: RaycastCar): DriveInput => {
+  const pilot = (maxV = 19, grip = 12, digital = false) => (car: ArcadeCar): DriveInput => {
     let p = track.project(car.pos, hint);
     if (p.distance > 6) p = track.project(car.pos);
     hint = p.index;

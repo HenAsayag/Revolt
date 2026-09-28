@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { DriveInput } from '../core/Input';
 import type { Track } from '../track/Track';
-import type { RaycastCar } from '../vehicle/RaycastCar';
+import type { ArcadeCar } from '../vehicle/ArcadeCar';
 
 export interface AIPersonality {
   name: string;
@@ -25,7 +25,7 @@ export const AI_ROSTER: AIPersonality[] = [
 export interface AIContext {
   /** Metres this car is ahead (+) or behind (−) the player in the race. */
   gapToPlayer: number;
-  others: RaycastCar[];
+  others: ArcadeCar[];
   racing: boolean;
   /** Difficulty: top-speed multiplier and rubber-band strength multiplier (1 = normal). */
   pace?: number;
@@ -62,7 +62,7 @@ export class AIDriver {
   stats = { respawns: 0, reverses: 0, log: [] as string[] };
 
   constructor(
-    readonly car: RaycastCar,
+    readonly car: ArcadeCar,
     private readonly track: Track,
     readonly p: AIPersonality,
     /** Track spans [s0, s1] where the driver takes the centre line (boost pads, the loop). */
