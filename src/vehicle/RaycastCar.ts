@@ -123,7 +123,7 @@ export class RaycastCar {
     // Tub: as wide as the wheels so walls hit the body, not the (raycast) tyres.
     const tub = RAPIER.ColliderDesc.roundCuboid(cfg.halfTrack + cfg.wheelWidth / 2 - 0.02, h.y - 0.02, h.z + 0.02, 0.02)
       .setDensity(0)
-      .setFriction(0.35)
+      .setFriction(0.15)
       .setRestitution(0) // bottoming out must not bounce; walls add their own restitution
       .setCollisionGroups(CAR_GROUPS);
     // Roll cage / shell so the car lands on its roof believably.
@@ -187,7 +187,11 @@ export class RaycastCar {
     const maxSteer = clamp(gripSteer, cfg.maxSteerHigh, cfg.maxSteerLow);
     const targetSteer = input.steer * maxSteer;
     const returning = Math.abs(targetSteer) < Math.abs(this.steerAngle) || Math.sign(targetSteer) !== Math.sign(this.steerAngle);
-    this.steerAngle = moveTowards(this.steerAngle, targetSteer, (returning ? cfg.steerReturnSpeed : cfg.steerSpeed) * dt);
+    // Time to full lock grows with speed: a tap of a digital key makes a small correction at pace,
+    // holding it still reaches full lock.
+    const lockTime = THREE.MathUtils.lerp(cfg.steerTimeLow, cfg.steerTimeHigh, clamp(vAbs / cfg.maxSpeed, 0, 1));
+    const rack = Math.min(cfg.steerSpeed, maxSteer / lockTime);
+    this.steerAngle = moveTowards(this.steerAngle, targetSteer, (returning ? cfg.steerReturnSpeed : rack) * dt);
 
     // --- Engine & brakes (totals, split over wheels below).
     const t = input.throttle;
@@ -335,6 +339,7 @@ export class RaycastCar {
     } else {
       this.slipAngle = this.computeSlip(linvel);
       if (grounded >= 3 && !input.handbrake) this.stabilizeYaw(dt);
+      if (grounded >= 2 && !input.handbrake) this.yawControl(dt, input);
       this.trackDrift(dt, input, grounded);
       if (this.airTime > 0) this.lastAirTime = this.airTime;
       this.airTime = 0;
@@ -409,6 +414,32 @@ export class RaycastCar {
       this.driftBoosts++;
     }
     if (slip < 0.2) this.driftTime = 0;
+  }
+
+  /**
+   * Stability control: the car may not rotate faster than the steering asks for (or than the tyres
+   * could manage), and straightens up promptly when you let go of the steering. Handbrake turns
+   * bypass it so drifting still works.
+   */
+  private yawControl(dt: number, input: DriveInput): void {
+    const cfg = this.cfg;
+    const v = this.forwardSpeed;
+    if (Math.abs(v) < 2.5) return;
+    const up = this.up;
+    const av = this.body.angvel();
+    const wUp = av.x * up.x + av.y * up.y + av.z * up.z;
+    const wheelbase = cfg.frontAxleZ - cfg.rearAxleZ;
+    const rMax = (cfg.gripFront * 9.81) / Math.abs(v);
+    // Steering right (+) turns clockwise seen from above = negative yaw.
+    const desired = clamp((-v * Math.tan(this.steerAngle)) / wheelbase, -rMax, rMax);
+    const err = wUp - desired;
+    // Not steering: settle toward the requested rate. Steering: only fight over-rotation.
+    const overRotating = Math.abs(wUp) > Math.abs(desired) && (desired === 0 || Math.sign(wUp) === Math.sign(desired));
+    const gain = Math.abs(input.steer) < 0.05 ? cfg.yawSettle : overRotating ? cfg.yawLimit : 0;
+    if (gain === 0) return;
+    const a = clamp(-gain * err, -cfg.yawAssistMax, cfg.yawAssistMax);
+    _imp.copy(up).multiplyScalar(a * this.principalInertia.y * dt);
+    this.body.applyTorqueImpulse(vec(_imp), true);
   }
 
   /**

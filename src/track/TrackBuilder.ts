@@ -165,7 +165,7 @@ export function buildTrack(scene: THREE.Object3D, world: RAPIER.World, track: Tr
         mid.clone().add(new THREE.Vector3(0, BARRIER.height / 2, 0)),
         new THREE.Vector3(BARRIER.base / 2 - 0.04, BARRIER.height / 2, len / 2),
         q.clone(),
-        { friction: 0.15, restitution: 0.35 },
+        { friction: 0.02, restitution: 0.05 }, // slide along, don't ping off
       );
     }
   }

@@ -76,7 +76,8 @@ export class Input {
       const btn = (i: number) => pad.buttons[i]?.pressed ?? false;
       const val = (i: number) => pad.buttons[i]?.value ?? 0;
       const edge = (i: number) => btn(i) && !this.padPrev[i];
-      const padSteer = deadzone(pad.axes[0] ?? 0);
+      const rawSteer = deadzone(pad.axes[0] ?? 0);
+      const padSteer = Math.sign(rawSteer) * Math.abs(rawSteer) ** 1.6; // expo, as on the touch pad
       const padThrottle = val(PAD.RT) - val(PAD.LT);
       if (Math.abs(padSteer) > 0 || Math.abs(padThrottle) > 0.05 || btn(PAD.A)) this.usingGamepad = true;
       if (!steer) steer = padSteer;

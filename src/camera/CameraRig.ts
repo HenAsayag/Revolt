@@ -44,18 +44,18 @@ export class CameraRig {
   mode: CameraMode = 'chase';
 
   // Chase tuning — metres, for a ~0.5 m car.
-  distance = 1.25;
+  distance = 1.45;
   /** Extra pull-back at top speed. */
   speedDistance = 0.3;
-  height = 0.42;
-  lookAhead = 0.8;
+  height = 0.55;
+  lookAhead = 1.3;
   lookHeight = 0.1;
   /** SmoothDamp times: the offset from the car (not world position, so no speed-dependent lag). */
   offsetLag = 0.08;
-  headingLag = 0.16;
+  headingLag = 0.13;
   verticalLag = 0.09;
   baseFov = 62;
-  speedFov = 16;
+  speedFov = 10;
 
   private readonly offset = new THREE.Vector3();
   private readonly offsetVel = new THREE.Vector3();

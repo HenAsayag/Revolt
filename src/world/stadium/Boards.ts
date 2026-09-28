@@ -33,7 +33,7 @@ export function buildBoards(scene: THREE.Object3D, world: RAPIER.World): void {
       face.translate(0, 0, side * (BOARDS.thickness / 2 + 0.004));
       faces[ad].push(face.applyMatrix4(m));
     }
-    addStaticBox(world, pos, new THREE.Vector3(len / 2, BOARDS.height / 2, BOARDS.thickness / 2), q, { friction: 0.3, restitution: 0.3 });
+    addStaticBox(world, pos, new THREE.Vector3(len / 2, BOARDS.height / 2, BOARDS.thickness / 2), q, { friction: 0.02, restitution: 0.05 });
   };
   for (const s of [-1, 1]) {
     const n = Math.floor((BOARDS.halfX * 2 - 2) / segLen);

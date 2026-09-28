@@ -16,7 +16,8 @@ export function installDevTools(game: Game): void {
     return v.lengthSq() < 0.04 ? null : v.normalize();
   };
 
-  const pilot = (maxV = 19, grip = 12) => (car: RaycastCar): DriveInput => {
+  /** `digital`: steer like a keyboard player (full left / nothing / full right). */
+  const pilot = (maxV = 19, grip = 12, digital = false) => (car: RaycastCar): DriveInput => {
     let p = track.project(car.pos, hint);
     if (p.distance > 6) p = track.project(car.pos);
     hint = p.index;
@@ -38,11 +39,12 @@ export function installDevTools(game: Game): void {
     const vLim = Math.min(maxV, Math.sqrt(grip / Math.max(curv, 1e-3)), Math.sqrt(8 / Math.max(crest, 1e-3)));
     const v = car.forwardSpeed;
     const throttle = here.loop ? 1 : v > vLim + 0.8 ? -0.7 : v < vLim ? 1 : 0.15;
-    return { throttle, steer: THREE.MathUtils.clamp(-ang * 2, -1, 1), handbrake: false };
+    const steer = digital ? (Math.abs(ang) > 0.05 ? -Math.sign(ang) : 0) : THREE.MathUtils.clamp(-ang * 2, -1, 1);
+    return { throttle: digital && throttle > 0 ? 1 : throttle, steer, handbrake: false };
   };
 
   /** Drive `laps` laps from the grid with the pilot; returns lap times, flips and a progress log. */
-  const lap = (laps = 1, maxSeconds = 90, opts: { maxV?: number; from?: [number, number] } = {}) => {
+  const lap = (laps = 1, maxSeconds = 90, opts: { maxV?: number; from?: [number, number]; digital?: boolean } = {}) => {
     const car = game.player.car;
     game.stop();
     if (opts.from) {
@@ -54,7 +56,7 @@ export function installDevTools(game: Game): void {
       game.simulate(3.05); // countdown
     }
     hint = -1;
-    game.autopilot = pilot(opts.maxV);
+    game.autopilot = pilot(opts.maxV, 12, opts.digital);
     const t0 = game.simTime;
     let prevS = track.project(car.pos).s;
     let dist = 0, lastUp = 1, lapStart = 0;

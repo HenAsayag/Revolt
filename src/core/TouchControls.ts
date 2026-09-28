@@ -64,8 +64,9 @@ export class TouchControls {
       if (e.pointerId !== this.steerPointer) return;
       const range = Math.min(90, steerZone.clientWidth * 0.4);
       const dx = (e.clientX - this.steerOrigin) / range;
-      this.state.steer = Math.max(-1, Math.min(1, dx));
-      this.knob.style.transform = `translateX(${this.state.steer * 60}px)`;
+      const x = Math.max(-1, Math.min(1, dx));
+      this.state.steer = Math.sign(x) * Math.abs(x) ** 1.6; // expo: fine control near the centre
+      this.knob.style.transform = `translateX(${x * 60}px)`; // knob follows the thumb, not the curve
     });
     const endSteer = (e: PointerEvent) => {
       if (e.pointerId !== this.steerPointer) return;

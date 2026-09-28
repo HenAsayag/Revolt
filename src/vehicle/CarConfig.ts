@@ -67,7 +67,14 @@ export interface CarConfig {
   maxSteerHigh: number; // radians, floor at top speed
   /** Slip angle added on top of the grip-limited steer angle. */
   steerSlipAngle: number;
-  steerSpeed: number; // rad/s the steering rack moves
+  steerSpeed: number; // rad/s the steering rack moves at low speed
+  /** Seconds from centre to full lock at standstill / at top speed (slower = finer control with digital input). */
+  steerTimeLow: number;
+  steerTimeHigh: number;
+  /** Stability control gains (1/s): pull yaw rate to the steering's request when not steering / when over-rotating. */
+  yawSettle: number;
+  yawLimit: number;
+  yawAssistMax: number; // rad/s²
   steerReturnSpeed: number;
 
   /** Boost: drive-force multiplier and top-speed multiplier while boosting. */
@@ -126,9 +133,9 @@ export const DEFAULT_CAR: CarConfig = {
   slipAssistDamp: 4,
   slipAssistMax: 30,
 
-  maxSpeed: 20.5, // asymptote; drag caps it near 18 m/s ≈ 41 mph
+  maxSpeed: 18.8, // asymptote; drag caps it near 16.7 m/s ≈ 37 mph
   maxReverseSpeed: 6,
-  driveForce: 34,
+  driveForce: 36,
   brakeForce: 42,
   handbrakeForce: 6,
   coastDrag: 0.08,
@@ -138,7 +145,12 @@ export const DEFAULT_CAR: CarConfig = {
   maxSteerLow: 0.52,
   maxSteerHigh: 0.05,
   steerSlipAngle: 0.07,
-  steerSpeed: 4.5,
+  steerSpeed: 5,
+  steerTimeLow: 0.08,
+  steerTimeHigh: 0.3,
+  yawSettle: 7,
+  yawLimit: 5,
+  yawAssistMax: 22,
   steerReturnSpeed: 7,
 
   boostDrive: 2.1,
