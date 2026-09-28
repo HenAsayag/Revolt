@@ -60,7 +60,7 @@ export class RaceManager {
   constructor(
     readonly track: Track,
     readonly startS: number,
-    readonly laps: number,
+    public laps: number,
     world: RAPIER.World,
     /** Stretches where a car must never be put back (set pieces), as [s0, s1]. */
     noRespawn: [number, number][] = [],
@@ -114,6 +114,13 @@ export class RaceManager {
     for (const r of this.racers) {
       Object.assign(r, { hint: -1, started: false, lap: 1, nextCp: 0, lapStart: 0, lapTimes: [], finished: false, finishTime: 0, wrongWayFor: 0 });
     }
+  }
+
+  /** Straight to GO (attract-mode demo races). */
+  skipCountdown(): void {
+    this.phase = 'racing';
+    this.clock = 0;
+    this.lastCount = 0;
   }
 
   get racing(): boolean {

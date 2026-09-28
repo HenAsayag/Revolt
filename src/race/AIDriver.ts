@@ -27,6 +27,9 @@ export interface AIContext {
   gapToPlayer: number;
   others: RaycastCar[];
   racing: boolean;
+  /** Difficulty: top-speed multiplier and rubber-band strength multiplier (1 = normal). */
+  pace?: number;
+  band?: number;
 }
 
 const _to = new THREE.Vector3();
@@ -155,9 +158,10 @@ export class AIDriver {
     }
     // Rubber band: ease off when well ahead of the player, push when behind.
     const g = ctx.gapToPlayer;
-    const band = g > 0 ? 1 - Math.min(0.14, g * 0.003) : 1 + Math.min(0.08, -g * 0.002);
+    const bs = ctx.band ?? 1;
+    const band = g > 0 ? 1 - Math.min(0.14 * bs, g * 0.003 * bs) : 1 + Math.min(0.08 * bs, -g * 0.002 * bs);
     const skill = this.p.skill;
-    const maxV = 18 * skill * band;
+    const maxV = 18 * skill * band * (ctx.pace ?? 1);
     const grip = 11 * (0.9 + 0.1 * skill);
     const vLim = Math.min(maxV, Math.sqrt(grip / Math.max(curv, 1e-3)), Math.sqrt(8 / Math.max(crest, 1e-3)));
     const v = car.forwardSpeed;

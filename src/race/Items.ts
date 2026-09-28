@@ -92,9 +92,17 @@ export class PickupBoxes {
     this.update(0);
   }
 
+  private enabled = true;
+
+  /** Pickups off (menu option): boxes vanish and can't be collected. */
+  setEnabled(on: boolean): void {
+    this.enabled = on;
+    this.mesh.visible = this.core.visible = on;
+  }
+
   /** Box `i` was driven through: true (and it hides for a moment) if it was there. */
   take(i: number): boolean {
-    if (this.hiddenFor[i] > 0) return false;
+    if (!this.enabled || this.hiddenFor[i] > 0) return false;
     this.hiddenFor[i] = BOX_RESPAWN;
     this.grow[i] = 0;
     return true;
@@ -172,11 +180,17 @@ export class ItemWorld<T extends { car: RaycastCar }> {
   private readonly starGeo = new THREE.TorusGeometry(0.11, 0.012, 6, 20);
   private readonly starMat = new THREE.MeshBasicMaterial({ color: '#8ff4ff' });
 
+  /** Sound / particle hook: an item went off (`boost`, `throw`, `explode`, `oil`, `zap`) at `at`. */
+  onFx: ((kind: 'boost' | 'throw' | 'explode' | 'oil' | 'zap', at: THREE.Vector3, by: T) => void) | null = null;
+
   constructor(private readonly scene: THREE.Scene, private readonly world: RAPIER.World, private readonly racers: T[]) {}
 
   use(user: T, kind: ItemKind): void {
     const car = user.car;
-    if (kind === 'boost') car.boost(BOOST_SECONDS);
+    if (kind === 'boost') {
+      car.boost(BOOST_SECONDS);
+      this.onFx?.('boost', car.pos, user);
+    }
     else if (kind === 'bomb') this.throwBomb(user);
     else if (kind === 'oil') this.dropOil(user);
     else this.pulse(user);
@@ -228,6 +242,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
     mesh.position.copy(at);
     this.scene.add(mesh);
     this.bombs.push({ body, mesh, light, owner, age: 0 });
+    this.onFx?.('throw', at, owner);
   }
 
   private updateBombs(dt: number): void {
@@ -249,6 +264,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
       }
       if (!boom) continue;
       const at = b.mesh.position.clone();
+      this.onFx?.('explode', at, b.owner);
       this.burst(at, '#ff8a2a', BOMB_RADIUS * 0.9, 0.45, 0.6);
       this.burst(at, '#fff3b0', BOMB_RADIUS * 0.4, 0.2, 0.75);
       for (const r of this.racers) {
@@ -296,6 +312,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
     mesh.receiveShadow = true;
     this.scene.add(mesh);
     this.slicks.push({ pos, normal, mesh, owner, age: 0, cooldown: new Map(), hitsLeft: OIL_HITS });
+    this.onFx?.('oil', pos, owner);
     if (this.slicks.length > MAX_SLICKS) {
       const old = this.slicks.shift()!;
       this.scene.remove(old.mesh);
@@ -332,6 +349,7 @@ export class ItemWorld<T extends { car: RaycastCar }> {
   private pulse(owner: T): void {
     const car = owner.car;
     const at = car.pos.clone();
+    this.onFx?.('zap', at, owner);
     const ring = this.addFx(this.ringGeo, '#3fe6ff', at.clone().addScaledVector(car.up, 0.12), 0.2, PULSE_RADIUS, 0.6, 1);
     ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), car.up);
     (ring.material as THREE.MeshBasicMaterial).side = THREE.DoubleSide;

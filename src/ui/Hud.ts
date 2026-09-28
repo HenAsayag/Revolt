@@ -150,6 +150,9 @@ export class Hud {
     this.bannerTimer = seconds;
   }
 
+  /** Results-screen buttons ("RACE AGAIN" / "MENU"). */
+  onResultAction: ((a: 'again' | 'menu') => void) | null = null;
+
   showResults(rows: ResultRow[], footer: string): void {
     const body = rows
       .map((r) => `<tr class="${r.isPlayer ? 'me' : ''}"><td>${esc(r.place)}</td><td>${esc(r.name)}</td><td>${esc(r.time)}</td><td>${esc(r.best)}</td><td>${esc(r.stunts)}</td></tr>`)
@@ -158,9 +161,20 @@ export class Hud {
       <div class="hud-results-card">
         <div class="hud-results-title">RACE RESULTS</div>
         <table><thead><tr><th>Pos</th><th>Racer</th><th>Time</th><th>Best lap</th><th>Stunts</th></tr></thead><tbody>${body}</tbody></table>
+        <div class="hud-results-actions">
+          <button class="menu-btn primary" data-result="again">RACE AGAIN</button>
+          <button class="menu-btn" data-result="menu">MENU</button>
+        </div>
         <div class="hud-results-foot">${esc(footer)}</div>
       </div>`;
+    for (const b of this.el.results.querySelectorAll<HTMLElement>('[data-result]')) {
+      b.addEventListener('click', () => this.onResultAction?.(b.dataset.result as 'again' | 'menu'));
+    }
     this.el.results.classList.add('show');
+  }
+
+  get resultsShown(): boolean {
+    return this.el.results.classList.contains('show');
   }
 
   hideResults(): void {

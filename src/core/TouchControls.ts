@@ -13,6 +13,7 @@ export interface TouchState {
   camera: boolean;
   confirm: boolean;
   item: boolean;
+  pause: boolean;
   active: boolean;
 }
 
@@ -25,7 +26,7 @@ export const isTouchDevice = (): boolean => {
 };
 
 export class TouchControls {
-  readonly state: TouchState = { steer: 0, gas: false, brake: false, drift: false, reset: false, camera: false, confirm: false, item: false, active: false };
+  readonly state: TouchState = { steer: 0, gas: false, brake: false, drift: false, reset: false, camera: false, confirm: false, item: false, pause: false, active: false };
   private readonly root: HTMLElement;
   private readonly knob: HTMLElement;
   private steerPointer: number | null = null;
@@ -46,7 +47,7 @@ export class TouchControls {
       <div class="t-top">
         <button class="t-mini" data-tap="reset" title="Reset">↺</button>
         <button class="t-mini" data-tap="camera" title="Camera">🎥</button>
-        <button class="t-mini" data-tap="confirm" title="Restart">⟲</button>
+        <button class="t-mini" data-tap="pause" title="Pause">⏸</button>
         <button class="t-mini" data-tap="fullscreen" title="Fullscreen">⛶</button>
       </div>
       <div class="t-rotate">Turn your phone sideways for the best view ↻</div>`;
@@ -104,7 +105,7 @@ export class TouchControls {
         e.preventDefault();
         const what = btn.dataset.tap!;
         if (what === 'fullscreen') this.toggleFullscreen();
-        else this.state[what as 'reset' | 'camera' | 'confirm' | 'item'] = true;
+        else this.state[what as 'reset' | 'camera' | 'confirm' | 'item' | 'pause'] = true;
       });
     }
     // No page scrolling, zooming or long-press menus while playing.

@@ -18,9 +18,20 @@ import { CONTROL_POINTS, FEATURES } from '../track/trackData';
 import { formatTime, ordinal, RaceManager, type RaceEvent, type RacerProgress } from '../race/RaceManager';
 import { AI_ROSTER, AIDriver } from '../race/AIDriver';
 import { aiWantsToUse, ITEM_NAMES, ItemWorld, PickupBoxes, rollItem, type ItemHit, type ItemKind } from '../race/Items';
+import { Sound, type SfxName } from '../audio/Sound';
+import { Particles } from '../render/Particles';
+import { Menu, type Difficulty, type Settings } from '../ui/Menu';
 
 const MPH = 2.23694;
-const LAPS = 3;
+/** Rival pace and rubber-band strength per difficulty. */
+const DIFFICULTY: Record<Difficulty, { pace: number; band: number }> = {
+  easy: { pace: 0.9, band: 1.6 },
+  normal: { pace: 1, band: 1 },
+  hard: { pace: 1.05, band: 0.5 },
+};
+/** Attract-mode demo race: effectively endless. */
+const DEMO_LAPS = 99;
+const CONFETTI = ['#ff4d4d', '#ffd21f', '#4dff88', '#4dc3ff', '#b36bff', '#ffffff'];
 /** Grid slot the player starts from (0 = pole); the AI fill the rest. */
 const PLAYER_SLOT = 5;
 const MAX_STEPS_PER_FRAME = 8;
@@ -37,6 +48,11 @@ const RAIL_K = 30;
 const RAIL_D = 8;
 const RAIL_MAX = 16;
 const _tmp = new THREE.Vector3();
+const _tmp2 = new THREE.Vector3();
+const _v2 = new THREE.Vector2();
+const _col = new THREE.Color();
+const rand = (a: number, b: number) => a + Math.random() * (b - a);
+const v3 = (t: { x: number; y: number; z: number }) => new THREE.Vector3(t.x, t.y, t.z);
 /** Item box rows (track s), roulette spin before an item can be used, stunt points per item hit. */
 const PICKUP_ROWS = [52, 130, 212, 265];
 const ITEM_ROLL_SECONDS = 0.9;
@@ -64,6 +80,12 @@ interface Racer {
   item: ItemKind | null;
   itemRoll: number;
   itemHeld: number;
+  /** Smoothed motor speed for the engine sound, particle emission accumulators, last-frame state. */
+  rev: number;
+  fxSmoke: number;
+  fxFlame: number;
+  wasAir: number;
+  prevSpeed: number;
   /** Interpolated render pose. */
   renderPos: THREE.Vector3;
   renderQuat: THREE.Quaternion;
@@ -110,6 +132,24 @@ export class Game {
   private readonly racerByCollider = new Map<number, Racer>();
   readonly pickups: PickupBoxes;
   readonly items: ItemWorld<Racer>;
+  readonly sound = new Sound();
+  readonly menu: Menu;
+  /** 'menu' = title screen over an AI demo race; 'paused' freezes the race under the pause menu. */
+  mode: 'menu' | 'race' | 'paused' = 'menu';
+  private difficulty = DIFFICULTY.normal;
+  /** Drives the player's car in the demo race; the camera cuts between cars. */
+  private readonly demoDriver: AIDriver;
+  private demoFocus!: Racer;
+  private demoCut = 0;
+  private readonly smoke: Particles;
+  private readonly glow: Particles;
+  private readonly confetti: Particles;
+  /** Adaptive resolution: target and current pixel ratio, and the 1 s check. */
+  private readonly prTarget = Math.min(window.devicePixelRatio, QUALITY.pixelRatioCap);
+  private pr = this.prTarget;
+  private perfTimer = 0;
+  private perfGood = 0;
+  private readonly chase = { distance: 0, height: 0 };
   /** Dev/test counters: items used and hits landed, by kind (reset each race). */
   itemStats = { used: {} as Record<string, number>, hits: {} as Record<string, number> };
 
@@ -167,7 +207,7 @@ export class Game {
     // In (or just before) the loop → back before its boost pad so there's speed for another go.
     const loop = this.trackBuild.loopSpan;
     if (loop) noRespawn.push([loop[0] - 14, loop[1]]);
-    this.race = new RaceManager(this.track, this.trackBuild.startS, LAPS, this.world, noRespawn);
+    this.race = new RaceManager(this.track, this.trackBuild.startS, 3, this.world, noRespawn);
     for (const r of this.racers) r.progress = this.race.addRacer(r.car, r.ai ? r.ai.p.name : 'YOU');
     this.playerProgress = this.player.progress;
     this.buildCheckpointMarkers();
@@ -188,9 +228,129 @@ export class Game {
       return hit ? hit.timeOfImpact / len : null;
     });
     this.hud = new Hud(hudRoot);
+    this.hud.onResultAction = (a) => {
+      this.sound.play('click');
+      if (a === 'again') this.beginRace();
+      else this.enterMenu();
+    };
+
+    const lowQ = QUALITY.name === 'low';
+    this.smoke = new Particles(this.scene, lowQ ? 260 : 600, { soft: true });
+    this.glow = new Particles(this.scene, lowQ ? 160 : 360, { additive: true, soft: true });
+    this.confetti = new Particles(this.scene, 260, { soft: false });
+    this.items.onFx = (kind, at, by) => this.onItemFx(kind, at, by);
+
+    this.demoDriver = new AIDriver(this.player.car, this.track, { name: 'YOU', skill: 0.95, lane: 0.1, seed: 11 });
+    this.chase.distance = this.rig.distance;
+    this.chase.height = this.rig.height;
+    this.menu = new Menu(document.body, {
+      start: (st) => this.beginRace(st),
+      resume: () => this.resume(),
+      restart: () => this.beginRace(),
+      quit: () => this.enterMenu(),
+      changed: (st) => this.sound.setVolumes({ music: st.music, sfx: st.sfx }),
+      click: () => this.sound.play('click'),
+    });
+    this.sound.setVolumes({ music: this.menu.settings.music, sfx: this.menu.settings.sfx });
+    // Audio may only start from a user gesture.
+    const unlock = () => this.sound.unlock();
+    for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, unlock, { passive: true });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden && this.mode === 'race' && this.race.phase !== 'finished') this.pause();
+    });
 
     window.addEventListener('resize', () => this.resize());
     this.resize();
+    this.enterMenu();
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // Modes
+
+  /** Title screen over an endless AI demo race. */
+  enterMenu(): void {
+    this.mode = 'menu';
+    document.body.classList.add('in-menu');
+    document.body.classList.remove('paused');
+    this.race.laps = DEMO_LAPS;
+    this.difficulty = DIFFICULTY.normal;
+    this.pickups.setEnabled(true);
+    this.restartRace();
+    this.race.skipCountdown();
+    this.demoDriver.reset();
+    this.cutDemoCamera();
+    this.rig.distance = 2.3;
+    this.rig.height = 0.85;
+    this.menu.show('title');
+    this.sound.setMusicMode('menu');
+  }
+
+  /** Start (or restart) a real race with the given settings. */
+  beginRace(st: Settings = this.menu.settings): void {
+    this.mode = 'race';
+    document.body.classList.remove('in-menu', 'paused');
+    this.menu.hide();
+    this.race.laps = st.laps;
+    this.difficulty = DIFFICULTY[st.difficulty];
+    this.pickups.setEnabled(st.items);
+    this.rig.distance = this.chase.distance;
+    this.rig.height = this.chase.height;
+    this.restartRace();
+    this.demoDriver.reset();
+    this.sound.setMusicMode('race');
+  }
+
+  pause(): void {
+    if (this.mode !== 'race') return;
+    this.mode = 'paused';
+    document.body.classList.add('paused');
+    this.menu.show('pause');
+    this.sound.quiet();
+    this.sound.setMusicMode('menu');
+  }
+
+  resume(): void {
+    if (this.mode !== 'paused') return;
+    this.mode = 'race';
+    document.body.classList.remove('paused');
+    this.menu.hide();
+    this.sound.setMusicMode('race');
+  }
+
+  /** The car the camera (and the engine sound) follows. */
+  private focusRacer(): Racer {
+    return this.mode === 'menu' ? this.demoFocus : this.player;
+  }
+
+  private cutDemoCamera(): void {
+    const pick = this.racers[Math.floor(Math.random() * this.racers.length)];
+    this.demoFocus = pick === this.demoFocus ? this.racers[(this.racers.indexOf(pick) + 1) % this.racers.length] : pick;
+    this.demoCut = 6 + Math.random() * 3;
+    this.rig.snap();
+  }
+
+  private trackIndexOf(r: Racer): number {
+    if (r === this.player) return this.playerTrackIndex;
+    return r.ai ? r.ai.hint : -1;
+  }
+
+  /** Distance attenuation and stereo pan for a sound at `pos`, heard from the camera. */
+  private spatial(pos: THREE.Vector3, near = 4): { gain: number; pan: number } {
+    _tmp.subVectors(pos, this.camera.position);
+    const d = _tmp.length();
+    const right = _tmp2.set(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    return { gain: 1 / (1 + (d / near) ** 2), pan: d > 0.01 ? (_tmp.dot(right) / d) * 0.7 : 0 };
+  }
+
+  private sfx(name: SfxName, pos?: THREE.Vector3, gain = 1): void {
+    if (this.mode === 'paused') return;
+    const menuScale = this.mode === 'menu' ? 0.4 : 1;
+    if (!pos) {
+      this.sound.play(name, { gain: gain * menuScale });
+      return;
+    }
+    const sp = this.spatial(pos);
+    this.sound.play(name, { gain: gain * sp.gain * menuScale, pan: sp.pan });
   }
 
   private addRacer(liveryIndex: number, pos: THREE.Vector3, yaw: number): Racer {
@@ -199,6 +359,7 @@ export class Game {
     this.scene.add(visual.root);
     const racer: Racer = {
       car, visual, ai: null, progress: null!, input: { throttle: 0, steer: 0, handbrake: true }, stairStep: [-1, -1], rail: 0, item: null, itemRoll: 0, itemHeld: 0,
+      rev: 0, fxSmoke: 0, fxFlame: 0, wasAir: 0, prevSpeed: 0,
       renderPos: car.pos.clone(), renderQuat: car.quat.clone(),
     };
     this.racers.push(racer);
@@ -238,6 +399,145 @@ export class Game {
     if (dt > 0) this.fps += (1 / dt - this.fps) * 0.05;
     this.update(dt);
     this.render(dt);
+    this.adaptResolution(dt);
+  }
+
+  /** Hold 60 fps: drop the render resolution when frames run long, creep back up when there's headroom. */
+  private adaptResolution(dt: number): void {
+    if (document.hidden || (this.perfTimer += dt) < 1) return;
+    this.perfTimer = 0;
+    let pr = this.pr;
+    if (this.fps < 48 && pr > 0.6) {
+      pr = Math.max(0.6, pr * 0.85);
+      this.perfGood = 0;
+    } else if (this.fps > 58 && pr < this.prTarget) {
+      if (++this.perfGood >= 4) {
+        pr = Math.min(this.prTarget, pr * 1.1);
+        this.perfGood = 0;
+      }
+    } else {
+      this.perfGood = 0;
+    }
+    if (pr !== this.pr) {
+      this.pr = pr;
+      this.renderer.setPixelRatio(pr);
+      this.resize();
+    }
+  }
+
+  // ------------------------------------------------------------------------------------------
+  // Feel: particles and sound
+
+  /** Tyre smoke, boost flames, landing dust and impact thumps for every car. */
+  private carEffects(dt: number): void {
+    const q = QUALITY.name === 'low' ? 0.5 : 1;
+    const cam = this.camera.position;
+    for (const r of this.racers) {
+      const c = r.car;
+      const near = c.pos.distanceToSquared(cam) < 35 * 35;
+      // Sliding (drift, handbrake, spin-out): smoke from the rear tyres.
+      const slide = c.groundedCount >= 2 && c.speed > 3
+        ? Math.max(0, Math.abs(c.slipAngle) - 0.18) * 2.2 + (r.input.handbrake && c.speed > 5 ? 0.5 : 0) + (c.stunTime > 0 ? 0.6 : 0)
+        : 0;
+      r.fxSmoke = near ? r.fxSmoke + Math.min(1.5, slide) * 40 * q * dt : 0;
+      while (r.fxSmoke >= 1) {
+        r.fxSmoke -= 1;
+        const rear = c.wheels.filter((w) => !w.front && w.grounded);
+        const w = rear[Math.floor(Math.random() * rear.length)];
+        if (!w) break;
+        const v = c.body.linvel();
+        this.smoke.emit({
+          pos: _tmp.copy(w.contactPoint).addScaledVector(c.up, 0.03),
+          vel: _tmp2.set(v.x * 0.15 + rand(-0.3, 0.3), 0.25 + Math.random() * 0.3, v.z * 0.15 + rand(-0.3, 0.3)),
+          color: _col.setRGB(0.93, 0.93, 0.95), size: 0.12, grow: 0.9, life: rand(0.8, 1.2), alpha: 0.5, drag: 1.5, gravity: -0.15,
+        });
+      }
+      // Boost: a flame from the back.
+      r.fxFlame = near && c.boostTime > 0 ? r.fxFlame + 70 * q * dt : 0;
+      while (r.fxFlame >= 1) {
+        r.fxFlame -= 1;
+        const v = c.body.linvel();
+        this.glow.emit({
+          pos: _tmp.copy(c.pos).addScaledVector(c.fwd, -0.27).addScaledVector(c.up, 0.03 + rand(-0.015, 0.015)).addScaledVector(c.left, rand(-0.03, 0.03)),
+          vel: _tmp2.set(v.x * 0.85, v.y * 0.85, v.z * 0.85).addScaledVector(c.fwd, -rand(1.5, 3)),
+          color: _col.set(Math.random() < 0.6 ? '#ff8a1f' : '#ffe45a'), size: rand(0.07, 0.11), grow: -0.25, life: rand(0.12, 0.2), alpha: 0.9, drag: 3,
+        });
+      }
+      // Landing after a proper hop: a puff of turf and a thump.
+      if (r.wasAir > 0.35 && c.airTime === 0 && c.groundedCount > 0) {
+        if (near) {
+          for (let k = 0; k < 12 * q; k++) {
+            const a = Math.random() * Math.PI * 2;
+            this.smoke.emit({
+              pos: _tmp.copy(c.pos).addScaledVector(c.up, -0.08),
+              vel: _tmp2.set(Math.cos(a) * rand(1, 2.4), rand(0.2, 0.7), Math.sin(a) * rand(1, 2.4)),
+              color: _col.set('#b8c99a'), size: 0.12, grow: 0.7, life: rand(0.5, 0.8), alpha: 0.4, drag: 3,
+            });
+          }
+        }
+        this.sfx('land', c.pos, Math.min(1, r.wasAir));
+        if (r === this.focusRacer()) this.rig.shake(Math.min(0.03, r.wasAir * 0.02));
+      }
+      // Sudden stop (a wall, a car): thump, sparks, a little shake.
+      const drop = r.prevSpeed - c.speed;
+      if (drop > 2.6 && c.stunTime <= 0 && r.wasAir === 0) {
+        const g = Math.min(1, drop / 8);
+        this.sfx('hit', c.pos, g);
+        if (near) {
+          for (let k = 0; k < 8; k++) {
+            this.glow.emit({
+              pos: _tmp.copy(c.pos).addScaledVector(c.fwd, 0.2), vel: _tmp2.set(rand(-2, 2), rand(0.5, 2), rand(-2, 2)),
+              color: _col.set('#ffd98a'), size: 0.04, life: rand(0.2, 0.35), gravity: 6,
+            });
+          }
+        }
+        if (r === this.focusRacer()) this.rig.shake(0.03 * g);
+      }
+      r.wasAir = c.airTime;
+      r.prevSpeed = c.speed;
+    }
+  }
+
+  private throwConfetti(): void {
+    const at = this.player.car.pos;
+    for (let k = 0; k < 220; k++) {
+      this.confetti.emit({
+        pos: _tmp.copy(at).add(_tmp2.set(rand(-1.5, 1.5), rand(1.2, 2.2), rand(-1.5, 1.5))),
+        vel: _tmp2.set(rand(-1.5, 1.5), rand(0.5, 3), rand(-1.5, 1.5)),
+        color: _col.set(CONFETTI[k % CONFETTI.length]), size: rand(0.03, 0.06), life: rand(2.5, 4), gravity: 1.6, drag: 1.4,
+      });
+    }
+    this.sound.cheer(1.3);
+  }
+
+  /** Engines (the followed car + the three nearest others) and tyre squeal. */
+  private updateAudio(dt: number): void {
+    if (!this.sound.ctx) return;
+    if (this.mode === 'paused') {
+      this.sound.quiet();
+      return;
+    }
+    const focus = this.focusRacer();
+    const cam = this.camera.position;
+    const others = this.racers
+      .filter((r) => r !== focus)
+      .map((r) => ({ r, d: r.car.pos.distanceTo(cam) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 3);
+    const menuScale = this.mode === 'menu' ? 0.45 : 1;
+    [{ r: focus, d: 0 }, ...others].forEach(({ r, d }, i) => {
+      const c = r.car;
+      const spin = c.groundedCount > 0 ? Math.min(1.1, Math.abs(c.forwardSpeed) / c.cfg.maxSpeed) : Math.max(r.rev * 0.97, Math.abs(r.input.throttle));
+      r.rev += (spin + (c.boostTime > 0 ? 0.15 : 0) - r.rev) * (1 - Math.exp(-dt * 8));
+      const load = c.stunTime > 0 ? 0 : Math.abs(r.input.throttle);
+      const gain = (i === 0 ? 1 : 1 / (1 + (d / 3) ** 2)) * menuScale;
+      this.sound.setEngine(i, r.rev, load, gain, i === 0 ? 0 : this.spatial(c.pos).pan);
+    });
+    const c = focus.car;
+    const skid = c.groundedCount >= 2 && c.speed > 3
+      ? Math.max(0, Math.abs(c.slipAngle) - 0.15) * 3 + (focus.input.handbrake && c.speed > 4 ? 0.4 : 0) + (c.stunTime > 0 ? 0.5 : 0)
+      : 0;
+    this.sound.setSkid(skid * menuScale);
   }
 
   /**
@@ -255,14 +555,38 @@ export class Game {
 
   private update(dt: number): void {
     this.input.poll();
-    this.handleActions();
-    const drive = this.autopilot ? this.autopilot(this.player.car, this.simTime) : this.input.drive;
-    const countdown = this.race.phase === 'countdown';
+    const act = this.input.actions;
+    if (this.mode !== 'race') {
+      // Gamepad in menus (the keyboard and mouse talk to the menu directly).
+      if (act.nav) this.menu.nav(act.nav);
+      if (act.accept) this.menu.activate();
+      if (act.back || (this.mode === 'paused' && act.pause)) this.menu.back();
+      if (this.mode === 'menu' && act.confirm) this.menu.activate();
+      if (this.mode === 'paused') return;
+    } else {
+      this.handleActions();
+    }
     const allCars = this.racers.map((r) => r.car);
+    const demo = this.mode === 'menu';
+    const aiCtx = (r: Racer) => ({
+      gapToPlayer: demo ? 0 : r.progress.progress - this.playerProgress.progress,
+      others: allCars,
+      racing: this.race.racing,
+      pace: this.difficulty.pace,
+      band: this.difficulty.band,
+    });
+    // Past the flag (or in the demo) the player's car drives itself: a lap of honour.
+    const selfDrive = demo || this.playerProgress.finished;
+    const drive = this.autopilot
+      ? this.autopilot(this.player.car, this.simTime)
+      : selfDrive
+        ? this.demoDriver.drive(dt, aiCtx(this.player))
+        : this.input.drive;
+    const countdown = this.race.phase === 'countdown';
     for (const r of this.racers) {
       let d = drive;
       if (r.ai) {
-        d = r.ai.drive(dt, { gapToPlayer: r.progress.progress - this.playerProgress.progress, others: allCars, racing: this.race.racing });
+        d = r.ai.drive(dt, aiCtx(r));
         // Finished AI cruise on at an easy pace.
         if (r.progress.finished) d = { throttle: Math.min(d.throttle, 0.35), steer: d.steer, handbrake: false };
       }
@@ -296,6 +620,12 @@ export class Game {
     for (const e of this.race.update(dt)) this.onRaceEvent(e);
     this.updateItems(dt);
 
+    this.carEffects(dt);
+    if (selfDrive && this.demoDriver.wantsRespawn && !this.autopilot) {
+      this.respawn(this.player);
+      this.demoDriver.reset();
+    }
+    if (demo && (this.demoCut -= dt) <= 0) this.cutDemoCamera();
     // Landed after a real jump → pop-up + stunt points.
     if (wasAirborne > 0 && pc.airTime === 0 && pc.lastAirTime >= 0.6) {
       this.hud.flash('AIR TIME', `${pc.lastAirTime.toFixed(1)}s`);
@@ -315,30 +645,45 @@ export class Game {
   }
 
   private onRaceEvent(e: RaceEvent): void {
+    if (this.mode !== 'race') return;
     const mine = 'racer' in e && e.racer === this.playerProgress;
     switch (e.type) {
       case 'count':
         this.hud.countdown(String(e.n));
+        this.sfx('count');
         break;
       case 'go':
         this.hud.countdown('GO!');
+        this.sfx('go');
         break;
       case 'lap':
-        if (mine) this.hud.flash(e.best && e.lap > 1 ? 'BEST LAP' : `LAP ${e.lap}`, formatTime(e.time), 2);
+        if (mine) {
+          this.hud.flash(e.best && e.lap > 1 ? 'BEST LAP' : `LAP ${e.lap}`, formatTime(e.time), 2);
+          if (e.lap < this.race.laps) this.sfx('lap');
+        }
         break;
       case 'finalLap':
-        if (mine) this.later(1800, () => this.hud.flash('FINAL LAP', '', 1.6));
+        if (mine) this.later(1800, () => {
+          this.hud.flash('FINAL LAP', '', 1.6);
+          this.sfx('finalLap');
+          this.sound.cheer(0.6);
+        });
         break;
       case 'finish':
         if (mine) {
           this.hud.flash('FINISH!', `${e.place}${ordinal(e.place)}`, 2.5);
+          this.sfx('finish');
+          this.throwConfetti();
           this.later(1500, () => this.showResults());
         } else if (this.playerProgress.finished) {
           this.showResults(); // someone else crossed the line: refresh the table
         }
         break;
       case 'wrongWay':
-        if (mine) this.hud.banner('WRONG WAY', 1.6);
+        if (mine) {
+          this.hud.banner('WRONG WAY', 1.6);
+          this.sfx('wrong');
+        }
         break;
     }
   }
@@ -352,7 +697,7 @@ export class Game {
       stunts: r === this.playerProgress ? this.score.toLocaleString('en-US') : '—',
       isPlayer: r === this.playerProgress,
     }));
-    this.hud.showResults(rows, 'Press ENTER to race again');
+    this.hud.showResults(rows, this.input.touch ? '' : 'ENTER: race again');
   }
 
   /** Race number, so delayed pop-ups from a previous race never fire into the next one. */
@@ -379,11 +724,15 @@ export class Game {
     this.trackBuild.cones.reset();
     this.trackBuild.balls.reset();
     this.items.clear();
+    this.smoke.clear();
+    this.glow.clear();
+    this.confetti.clear();
     this.itemStats = { used: {}, hits: {} };
     this.pickups.reset();
     for (const r of this.racers) {
       r.item = null;
       r.itemRoll = r.itemHeld = 0;
+      r.wasAir = r.prevSpeed = 0;
     }
     this.race.restart();
     this.score = 0;
@@ -453,11 +802,13 @@ export class Game {
         if (justExited && this.loopProgress > full * 0.9 && pc.up.y > 0.5) {
           this.hud.flash('LOOP BONUS', '+250');
           this.addScore(250);
+          if (this.mode === 'race') this.sound.cheer(0.7);
         }
         this.loopProgress = 0;
       }
     }
     for (const goal of this.trackBuild.balls.update(dt)) {
+      this.sfx('goal', this.trackBuild.balls.bodies[goal.ball] ? v3(this.trackBuild.balls.bodies[goal.ball].translation()) : undefined, 1);
       if (this.ballKicker.get(goal.ball) !== this.player) continue;
       this.hud.flash('GOAL!', '+500', 2);
       this.addScore(500);
@@ -465,6 +816,8 @@ export class Game {
     if (pc.driftBoosts !== this.lastDriftBoosts) {
       this.lastDriftBoosts = pc.driftBoosts;
       this.hud.flash('DRIFT BOOST', `${pc.lastDriftBoost.toFixed(1)}s`, 1.2);
+      this.sfx('drift');
+      this.sfx('boost', undefined, 0.6);
       this.addScore(Math.round(pc.lastDriftBoost * 60));
     }
   }
@@ -585,18 +938,25 @@ export class Game {
       if (!racer) return;
       const box = this.pickups.byCollider.get(h1) ?? this.pickups.byCollider.get(h2);
       if (box !== undefined) {
-        if (!racer.item && this.race.racing && this.pickups.take(box)) this.giveItem(racer);
+        if (!racer.item && this.race.racing && this.pickups.take(box)) {
+          this.giveItem(racer);
+          if (racer === this.player) this.sfx('pickup');
+        }
         return;
       }
       const pad = pads.byCollider.get(h1) ?? pads.byCollider.get(h2);
       if (pad !== undefined) {
         racer.car.boost(BOOST_PAD_SECONDS);
         if (racer === this.player) this.hud.flash('BOOST', '', 0.7);
+        this.sfx('boostPad', racer.car.pos);
         return;
       }
       const ball = balls.byCollider.get(h1) ?? balls.byCollider.get(h2);
       if (ball !== undefined) {
-        if (balls.kick(ball, racer.car.body.linvel(), racer.car.pos)) this.ballKicker.set(ball, racer);
+        if (balls.kick(ball, racer.car.body.linvel(), racer.car.pos)) {
+          this.ballKicker.set(ball, racer);
+          this.sfx('kick', racer.car.pos);
+        }
         return;
       }
       const cone = cones.byCollider.get(h1) ?? cones.byCollider.get(h2);
@@ -606,6 +966,7 @@ export class Game {
         // The cone's momentum comes out of the car's: a small, arcade-sized speed scrub.
         const v = body.linvel();
         body.setLinvel({ x: v.x * 0.95, y: v.y, z: v.z * 0.95 }, true);
+        this.sfx('cone', racer.car.pos);
       }
     });
   }
@@ -630,13 +991,19 @@ export class Game {
     for (const r of this.racers) {
       if (!r.item) continue;
       if (r.itemRoll > 0) {
+        const before = r.itemRoll;
         r.itemRoll = Math.max(0, r.itemRoll - dt);
+        if (r === this.player && this.mode === 'race') {
+          if (Math.floor(before * 11) !== Math.floor(r.itemRoll * 11)) this.sfx('tick');
+          if (r.itemRoll === 0) this.sfx('ready');
+        }
         continue;
       }
       r.itemHeld += dt;
       // AI think about it a few times a second (not every frame, so they don't all fire at once).
-      if (r.ai && this.race.racing && !r.progress.finished && Math.random() < dt * 3) {
-        const s = this.track.samples[Math.max(0, r.ai.hint)].s;
+      const bot = r.ai !== null || (this.mode === 'menu' && r === this.player);
+      if (bot && this.race.racing && !r.progress.finished && Math.random() < dt * 3) {
+        const s = this.track.samples[Math.max(0, this.trackIndexOf(r))].s;
         if (aiWantsToUse(r.item, r.car, cars, this.track, s, r.itemHeld)) this.useItem(r);
       }
     }
@@ -644,8 +1011,36 @@ export class Game {
     for (const h of this.items.update(dt)) this.onItemHit(h);
   }
 
+  private onItemFx(kind: 'boost' | 'throw' | 'explode' | 'oil' | 'zap', at: THREE.Vector3, _by: Racer): void {
+    this.sfx(kind, at);
+    if (kind === 'explode') {
+      for (let k = 0; k < 26; k++) {
+        this.glow.emit({
+          pos: at, vel: _tmp.set(rand(-1, 1), rand(0.5, 1.6), rand(-1, 1)).normalize().multiplyScalar(rand(2, 5)),
+          color: _col.set(Math.random() < 0.5 ? '#ffb02e' : '#fff0a0'), size: rand(0.05, 0.1), life: rand(0.4, 0.8), gravity: 7, drag: 1.5,
+        });
+      }
+      for (let k = 0; k < 10; k++) {
+        this.smoke.emit({
+          pos: at, vel: _tmp.set(rand(-1, 1), rand(0.3, 1), rand(-1, 1)).multiplyScalar(1.2),
+          color: _col.set('#3a3a40'), size: 0.3, grow: 1.2, life: rand(0.9, 1.4), alpha: 0.5, drag: 2, gravity: -0.3,
+        });
+      }
+      const near = this.spatial(at, 2.5).gain;
+      this.rig.shake(0.08 * near);
+    } else if (kind === 'zap') {
+      for (let k = 0; k < 24; k++) {
+        this.glow.emit({
+          pos: at, vel: _tmp.set(rand(-1, 1), rand(0, 0.6), rand(-1, 1)).normalize().multiplyScalar(rand(3, 6)),
+          color: _col.set('#7ff0ff'), size: 0.06, life: rand(0.2, 0.4), drag: 3,
+        });
+      }
+    }
+  }
+
   private onItemHit(h: ItemHit<Racer>): void {
     this.itemStats.hits[h.kind] = (this.itemStats.hits[h.kind] ?? 0) + 1;
+    if (h.kind === 'oil') this.sfx('spin', h.victim.car.pos);
     if (h.victim === this.player) {
       this.hud.flash(h.kind === 'oil' ? 'SPIN OUT!' : h.kind === 'pulse' ? 'ZAPPED!' : 'BOOM!', h.by === this.player ? '' : h.by.progress.name, 1.2);
     } else if (h.by === this.player) {
@@ -659,7 +1054,8 @@ export class Game {
     if (a.reset) this.resetPlayer();
     if (a.usePickup) this.useItem(this.player);
     if (a.camera) this.rig.cycle();
-    if (a.confirm) this.restartRace();
+    if (a.confirm && this.hud.resultsShown) this.beginRace();
+    if (a.pause) this.pause();
     if (a.debug) {
       this.hud.showDebug = !this.hud.showDebug;
       this.trackBuild.debugLine.visible = this.hud.showDebug;
@@ -678,6 +1074,7 @@ export class Game {
     const spot = this.race.respawnFor(r.progress);
     r.car.reset(spot.pos, spot.yaw);
     r.stairStep = [-1, -1];
+    if (r === this.player) this.playerTrackIndex = -1;
     if (r.ai) {
       r.ai.reset();
       r.ai.stats.respawns++;
@@ -694,28 +1091,36 @@ export class Game {
       r.visual.update(r.car, dt);
     }
 
-    const pc = this.player.car;
-    const lv = pc.body.linvel();
+    const focus = this.focusRacer();
+    const fc = focus.car;
+    const lv = fc.body.linvel();
     const target: CameraTarget = {
-      pos: this.player.renderPos,
-      quat: this.player.renderQuat,
+      pos: focus.renderPos,
+      quat: focus.renderQuat,
       velocity: new THREE.Vector3(lv.x, lv.y, lv.z),
-      speedFrac: Math.min(1, pc.speed / pc.cfg.maxSpeed),
-      grounded: pc.groundedCount > 0,
+      speedFrac: Math.min(1, fc.speed / fc.cfg.maxSpeed),
+      grounded: fc.groundedCount > 0,
     };
     // Loop: watch through it from the grass behind the entry (the chase view would be blocked).
-    const smp = this.track.samples[Math.max(0, this.playerTrackIndex)];
+    const smp = this.track.samples[Math.max(0, this.trackIndexOf(focus))];
     this.rig.shot = smp.loop && this.loopShot ? this.loopShot : null;
-    this.rig.update(target, dt);
+    if (this.mode !== 'paused') this.rig.update(target, dt);
     this.sky.position.copy(this.camera.position);
-    this.sun.follow(this.player.renderPos);
+    this.sun.follow(focus.renderPos);
+    const pxPerM = this.renderer.getDrawingBufferSize(_v2).y / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2));
+    const pdt = this.mode === 'paused' ? 0 : dt;
+    this.smoke.update(pdt, pxPerM);
+    this.glow.update(pdt, pxPerM);
+    this.confetti.update(pdt, pxPerM);
+    this.updateAudio(dt);
+    const pc = this.player.car;
 
     const pp = this.playerProgress;
     const place = this.race.placeOf(pp);
     const best = pp.lapTimes.length ? Math.min(...pp.lapTimes) : null;
     this.hud.setRace({
       lap: pp.lap,
-      laps: LAPS,
+      laps: this.race.laps,
       time: formatTime(pp.finished ? pp.finishTime : this.race.clock),
       best: best !== null ? formatTime(best) : null,
       place,
@@ -732,15 +1137,15 @@ export class Game {
       dt,
     );
     this.hud.setItem(this.player.item, this.player.itemRoll > 0);
-    this.stadium.tv.update(this.renderer, this.scene, this.player.renderPos, this.rigHeading(), dt);
+    this.stadium.tv.update(this.renderer, this.scene, focus.renderPos, this.rigHeading(focus), dt);
     this.renderer.shadowMap.needsUpdate = true;
     this.renderer.render(this.scene, this.camera);
   }
 
   private readonly _heading = new THREE.Vector3();
-  /** Player's flat heading, for the TV chase shot. */
-  private rigHeading(): THREE.Vector3 {
-    const f = this.player.car.fwd;
+  /** A car's flat heading, for the TV chase shot. */
+  private rigHeading(r: Racer): THREE.Vector3 {
+    const f = r.car.fwd;
     this._heading.set(f.x, 0, f.z);
     if (this._heading.lengthSq() < 1e-4) this._heading.set(1, 0, 0);
     return this._heading.normalize();

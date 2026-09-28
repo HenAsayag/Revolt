@@ -16,6 +16,11 @@ export interface ActionInput {
   debug: boolean;
   /** Enter / gamepad Start: restart or confirm on menus. */
   confirm: boolean;
+  /** Menu navigation (gamepad d-pad / stick, edges only; the keyboard is handled by the menu). */
+  nav: 'up' | 'down' | 'left' | 'right' | null;
+  /** Gamepad A / B in menus. */
+  accept: boolean;
+  back: boolean;
 }
 
 import { isTouchDevice, TouchControls } from './TouchControls';
@@ -34,13 +39,14 @@ const PAD = { A: 0, B: 1, X: 2, Y: 3, LT: 6, RT: 7, BACK: 8, START: 9 } as const
  */
 export class Input {
   readonly drive: DriveInput = neutralDrive();
-  readonly actions: ActionInput = { reset: false, camera: false, usePickup: false, pause: false, debug: false, confirm: false };
+  readonly actions: ActionInput = { reset: false, camera: false, usePickup: false, pause: false, debug: false, confirm: false, nav: null, accept: false, back: false };
   /** True when the gamepad produced input most recently (for UI hints later). */
   usingGamepad = false;
 
   private down = new Set<string>();
   private pressed = new Set<string>();
   private padPrev: boolean[] = [];
+  private lastStick: string | null = null;
   /** On-screen controls, created automatically on touch devices. */
   readonly touch: TouchControls | null;
 
@@ -71,6 +77,8 @@ export class Input {
     a.confirm = p('Enter', 'NumpadEnter');
     if (throttle || steer || handbrake) this.usingGamepad = false;
 
+    a.nav = null;
+    a.accept = a.back = false;
     const pad = firstGamepad();
     if (pad) {
       const btn = (i: number) => pad.buttons[i]?.pressed ?? false;
@@ -87,6 +95,13 @@ export class Input {
       a.reset ||= edge(PAD.Y);
       a.camera ||= edge(PAD.BACK);
       a.confirm ||= edge(PAD.START);
+      a.pause ||= edge(PAD.START);
+      a.accept = edge(PAD.A);
+      a.back = edge(PAD.B);
+      const sx = pad.axes[0] ?? 0, sy = pad.axes[1] ?? 0;
+      const stick = Math.abs(sx) > 0.6 || Math.abs(sy) > 0.6 ? (Math.abs(sx) > Math.abs(sy) ? (sx > 0 ? 'right' : 'left') : sy > 0 ? 'down' : 'up') : null;
+      a.nav = edge(12) ? 'up' : edge(13) ? 'down' : edge(14) ? 'left' : edge(15) ? 'right' : stick !== this.lastStick ? stick : null;
+      this.lastStick = stick;
       this.padPrev = pad.buttons.map((b) => b.pressed);
     }
 
@@ -99,7 +114,8 @@ export class Input {
       a.camera ||= t.camera;
       a.confirm ||= t.confirm;
       a.usePickup ||= t.item;
-      t.reset = t.camera = t.confirm = t.item = false;
+      a.pause ||= t.pause;
+      t.reset = t.camera = t.confirm = t.item = t.pause = false;
     }
 
     this.drive.throttle = Math.max(-1, Math.min(1, throttle));

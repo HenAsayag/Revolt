@@ -8,6 +8,8 @@ import type { RaycastCar } from '../vehicle/RaycastCar';
  * Dev-only helpers on `window.__test` (headless lap checks from the console / automation).
  * The pilot is a simple pure-pursuit driver along the spline — a stand-in until the phase-6 AI.
  */
+const TEST = { laps: 3, difficulty: 'normal' as const, items: true, music: 0, sfx: 0 };
+
 export function installDevTools(game: Game): void {
   const track = game.track;
   let hint = -1;
@@ -53,7 +55,7 @@ export function installDevTools(game: Game): void {
       const smp = track.sampleAt(s);
       car.reset(smp.pos.clone().addScaledVector(smp.up, 0.3), track.yawAt(s));
     } else {
-      game.restartRace();
+      game.beginRace(TEST);
       game.simulate(3.05); // countdown
     }
     hint = -1;
@@ -92,7 +94,7 @@ export function installDevTools(game: Game): void {
    */
   const race = (maxSeconds = 150, playerV = 17) => {
     game.stop();
-    game.restartRace();
+    game.beginRace(TEST);
     for (const r of game.racers) if (r.ai) r.ai.stats = { respawns: 0, reverses: 0, log: [] };
     hint = -1;
     // playerV < 0: the player's car gets an AI driver of its own (recovers from bumps and wedges).
@@ -131,7 +133,7 @@ export function installDevTools(game: Game): void {
     const delay = opts.delay ?? 0.15;
     const car = game.player.car;
     game.stop();
-    game.restartRace();
+    game.beginRace(TEST);
     for (const r of game.racers) if (r.ai) r.car.body.setEnabled(false);
     game.simulate(3.05);
     hint = -1;

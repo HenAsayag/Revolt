@@ -74,6 +74,14 @@ export class CameraRig {
 
   constructor(readonly camera: THREE.PerspectiveCamera, private readonly probe?: SightProbe) {}
 
+  private shakeAmt = 0;
+  private shakeTime = 0;
+
+  /** Kick the camera (explosions, hard hits); `amount` ≈ metres of jolt, decays quickly. */
+  shake(amount: number): void {
+    this.shakeAmt = Math.min(0.12, Math.max(this.shakeAmt, amount));
+  }
+
   cycle(): void {
     this.mode = this.mode === 'chase' ? 'bumper' : 'chase';
     this.initialised = false;
@@ -90,6 +98,14 @@ export class CameraRig {
     else {
       this.updateChase(t, dt);
       this.applyShot(t, dt);
+    }
+    if (this.shakeAmt > 0.001) {
+      this.shakeTime += dt;
+      const a = this.shakeAmt, w = this.shakeTime * 55;
+      this.camera.position.x += Math.sin(w * 1.3) * a;
+      this.camera.position.y += Math.sin(w * 1.7 + 1) * a * 0.7;
+      this.camera.position.z += Math.sin(w * 1.1 + 2) * a;
+      this.shakeAmt *= Math.exp(-dt * 7);
     }
     const targetFov = (this.mode === 'bumper' ? 74 : this.baseFov) + this.speedFov * t.speedFrac * t.speedFrac;
     this.fov += (targetFov - this.fov) * (1 - Math.exp(-dt * 3));

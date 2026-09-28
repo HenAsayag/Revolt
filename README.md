@@ -1,6 +1,11 @@
 # Bloomfield RC
 
 Toy RC-car racing inside Bloomfield Stadium (Tel Aviv). Vite + TypeScript + three.js + Rapier.
+**Play it:** https://henasayag.github.io/Revolt/ (desktop, gamepad or phone — turn it sideways).
+
+You against 7 AI rivals over 1, 3 or 5 laps: the pitch, a plywood ramp over the stands, stair hops,
+a ski jump, a loop, pickups (lightning boost, bouncy bomb, oil slick, electric pulse) and stunt
+points. All sound — engines, crowd, effects and the chiptune loop — is synthesised in the browser.
 The stadium is the Bloomfield 2019 Blender model (converted to `public/models/`); cars, track
 pieces and textures are procedural.
 
@@ -11,7 +16,9 @@ npm install
 npm run dev        # http://localhost:5180
 ```
 
-Other scripts: `npm run typecheck`, `npm run build`, `npm run sim` (headless handling tests).
+Other scripts: `npm run typecheck`, `npm run build`, `npm run sim` (headless handling tests),
+`npx tsx scripts/control.ts` (controllability), `npm run deploy:pages` (build → `gh-pages` branch).
+URL options: `?touch=1` / `?touch=0` force the on-screen controls, `?quality=low|high`.
 
 ## Controls
 
@@ -23,7 +30,8 @@ Other scripts: `npm run typecheck`, `npm run build`, `npm run sim` (headless han
 | Use pickup | Shift / E | B / X |
 | Reset car | R | Y |
 | Camera (chase / bumper) | C | Back |
-| Restart race | Enter | Start |
+| Pause (resume / restart / menu) | Esc / P | Start |
+| Menus | arrows + Enter | d-pad / stick + A, B = back |
 | Debug readout (+ checkpoints) | F3 or ` | — |
 
 ## The stadium model
@@ -48,7 +56,9 @@ GOAL**) → up a plywood ramp over the East stand seats → banked hairpin under
 real aisle (hops on every step) → ski-jump over the front glass and the ad boards → boost → the
 orange **loop** on the halfway line → slalom → U-turn in front of the south goal.
 
-Stunt points: air time, LOOP BONUS, GOAL, DRIFT BOOST (hold a slide, release it cleanly).
+Stunt points: air time, LOOP BONUS, GOAL, DRIFT BOOST (hold a slide, release it cleanly), item hits.
+Rainbow boxes give one item (odds favour whoever is behind). Through the loop the car drives
+itself — just hold the gas.
 Yellow chevron pads are boosts; braking cancels a boost.
 
 ## Layout
@@ -84,6 +94,11 @@ src/
     Cones.ts              knock-over cones (dynamic bodies + one InstancedMesh)
     Footballs.ts          footballs with goal-seeking kicks and goal detection
   race/RaceManager.ts     checkpoints, lap timing, standings, wrong way, safe respawns
+  race/AIDriver.ts        rival drivers: lane pursuit, speed planning, rubber band, stuck recovery
+  race/Items.ts           pickup boxes, the four items, AI item tactics
+  audio/Sound.ts          Web Audio synthesis: engines, tyres, crowd, effects, music
+  render/Particles.ts     pooled point-sprite particles (smoke, flames, sparks, confetti)
+  ui/Menu.ts              title screen + pause menu, saved settings
   dev/devTools.ts         window.__test (dev only): pilot + headless lap runner
   physics/groups.ts       collision groups (wheel rays skip cones; cars detect cones by sensor)
   ui/Hud.ts               DOM HUD
@@ -108,6 +123,7 @@ which is what makes the stadium feel enormous.
 3. ✅ Track spline, barriers, cones, ramps
 4. ✅ Loop + staircase (+ the pitch as part of the track, footballs, boosts, drift boost)
 5. ✅ Checkpoints, laps, positions, HUD (countdown, results, restart with Enter)
-6. AI
-7. Pickups
-8. Menus, audio, polish, performance
+6. ✅ AI — 7 rivals with personalities, rubber band, item tactics
+7. ✅ Pickups — lightning boost, bouncy bomb, oil slick, electric pulse
+8. ✅ Menus (demo race behind the title, options, pause, results), synthesised audio, particles,
+   camera shake, adaptive resolution to hold 60 fps
