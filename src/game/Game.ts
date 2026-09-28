@@ -17,6 +17,7 @@ import { buildTrack, type BuiltTrack } from '../track/TrackBuilder';
 import { CONTROL_POINTS, FEATURES } from '../track/trackData';
 import { formatTime, ordinal, RaceManager, type RaceEvent, type RacerProgress } from '../race/RaceManager';
 import { AI_ROSTER, AIDriver } from '../race/AIDriver';
+import { aiWantsToUse, ITEM_NAMES, ItemWorld, PickupBoxes, rollItem, type ItemHit, type ItemKind } from '../race/Items';
 
 const MPH = 2.23694;
 const LAPS = 3;
@@ -36,6 +37,10 @@ const RAIL_K = 30;
 const RAIL_D = 8;
 const RAIL_MAX = 16;
 const _tmp = new THREE.Vector3();
+/** Item box rows (track s), roulette spin before an item can be used, stunt points per item hit. */
+const PICKUP_ROWS = [52, 130, 212, 265];
+const ITEM_ROLL_SECONDS = 0.9;
+const ITEM_HIT_SCORE = 150;
 const BOOST_PAD_SECONDS = 1.1;
 /** Guide-rail assist gains in the stand section (rad/s² per rad, per rad/s, cap). */
 const GUIDE_K = 22;
@@ -55,6 +60,10 @@ interface Racer {
   stairStep: number[];
   /** How much the "rails" hold this car right now (0 = free, 1 = the loop). */
   rail: number;
+  /** Item in the slot (one per car), the roulette time left before it's usable, and time held. */
+  item: ItemKind | null;
+  itemRoll: number;
+  itemHeld: number;
   /** Interpolated render pose. */
   renderPos: THREE.Vector3;
   renderQuat: THREE.Quaternion;
@@ -99,6 +108,10 @@ export class Game {
   private readonly events = new RAPIER.EventQueue(true);
   /** Collider handle → racer, to attribute collision events. */
   private readonly racerByCollider = new Map<number, Racer>();
+  readonly pickups: PickupBoxes;
+  readonly items: ItemWorld<Racer>;
+  /** Dev/test counters: items used and hits landed, by kind (reset each race). */
+  itemStats = { used: {} as Record<string, number>, hits: {} as Record<string, number> };
 
   constructor(canvas: HTMLCanvasElement, hudRoot: HTMLElement, assets: StadiumAssets) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: QUALITY.antialias, powerPreference: 'high-performance' });
@@ -158,6 +171,9 @@ export class Game {
     for (const r of this.racers) r.progress = this.race.addRacer(r.car, r.ai ? r.ai.p.name : 'YOU');
     this.playerProgress = this.player.progress;
     this.buildCheckpointMarkers();
+    // Item boxes: rows across the flat, wide stretches (clear of jumps, cones, the loop and the stands).
+    this.pickups = new PickupBoxes(this.scene, this.world, this.track, PICKUP_ROWS);
+    this.items = new ItemWorld(this.scene, this.world, this.racers);
     const sightRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
     this.rig = new CameraRig(this.camera, (from, to) => {
       const d = to.clone().sub(from);
@@ -182,7 +198,7 @@ export class Game {
     const visual = new ProceduralBuggy(DEFAULT_CAR, LIVERIES[liveryIndex % LIVERIES.length]);
     this.scene.add(visual.root);
     const racer: Racer = {
-      car, visual, ai: null, progress: null!, input: { throttle: 0, steer: 0, handbrake: true }, stairStep: [-1, -1], rail: 0,
+      car, visual, ai: null, progress: null!, input: { throttle: 0, steer: 0, handbrake: true }, stairStep: [-1, -1], rail: 0, item: null, itemRoll: 0, itemHeld: 0,
       renderPos: car.pos.clone(), renderQuat: car.quat.clone(),
     };
     this.racers.push(racer);
@@ -278,6 +294,7 @@ export class Game {
     this.playerTrackIndex = proj.index;
     this.updateSetPieces(dt);
     for (const e of this.race.update(dt)) this.onRaceEvent(e);
+    this.updateItems(dt);
 
     // Landed after a real jump → pop-up + stunt points.
     if (wasAirborne > 0 && pc.airTime === 0 && pc.lastAirTime >= 0.6) {
@@ -361,6 +378,13 @@ export class Game {
     this.ballKicker.clear();
     this.trackBuild.cones.reset();
     this.trackBuild.balls.reset();
+    this.items.clear();
+    this.itemStats = { used: {}, hits: {} };
+    this.pickups.reset();
+    for (const r of this.racers) {
+      r.item = null;
+      r.itemRoll = r.itemHeld = 0;
+    }
     this.race.restart();
     this.score = 0;
     this.hud.setScore(0);
@@ -559,6 +583,11 @@ export class Game {
       if (!started) return;
       const racer = this.racerByCollider.get(h1) ?? this.racerByCollider.get(h2);
       if (!racer) return;
+      const box = this.pickups.byCollider.get(h1) ?? this.pickups.byCollider.get(h2);
+      if (box !== undefined) {
+        if (!racer.item && this.race.racing && this.pickups.take(box)) this.giveItem(racer);
+        return;
+      }
       const pad = pads.byCollider.get(h1) ?? pads.byCollider.get(h2);
       if (pad !== undefined) {
         racer.car.boost(BOOST_PAD_SECONDS);
@@ -581,9 +610,54 @@ export class Game {
     });
   }
 
+  private giveItem(r: Racer): void {
+    r.item = rollItem(this.race.placeOf(r.progress), this.racers.length);
+    r.itemRoll = ITEM_ROLL_SECONDS;
+    r.itemHeld = 0;
+  }
+
+  private useItem(r: Racer): void {
+    if (!r.item || r.itemRoll > 0 || !this.race.racing) return;
+    this.items.use(r, r.item);
+    this.itemStats.used[r.item] = (this.itemStats.used[r.item] ?? 0) + 1;
+    if (r === this.player && r.item === 'boost') this.hud.flash('LIGHTNING!', '', 0.8);
+    r.item = null;
+  }
+
+  /** Roulettes, AI item use, and what the items in play did this frame. */
+  private updateItems(dt: number): void {
+    const cars = this.racers.map((r) => r.car);
+    for (const r of this.racers) {
+      if (!r.item) continue;
+      if (r.itemRoll > 0) {
+        r.itemRoll = Math.max(0, r.itemRoll - dt);
+        continue;
+      }
+      r.itemHeld += dt;
+      // AI think about it a few times a second (not every frame, so they don't all fire at once).
+      if (r.ai && this.race.racing && !r.progress.finished && Math.random() < dt * 3) {
+        const s = this.track.samples[Math.max(0, r.ai.hint)].s;
+        if (aiWantsToUse(r.item, r.car, cars, this.track, s, r.itemHeld)) this.useItem(r);
+      }
+    }
+    this.pickups.update(dt);
+    for (const h of this.items.update(dt)) this.onItemHit(h);
+  }
+
+  private onItemHit(h: ItemHit<Racer>): void {
+    this.itemStats.hits[h.kind] = (this.itemStats.hits[h.kind] ?? 0) + 1;
+    if (h.victim === this.player) {
+      this.hud.flash(h.kind === 'oil' ? 'SPIN OUT!' : h.kind === 'pulse' ? 'ZAPPED!' : 'BOOM!', h.by === this.player ? '' : h.by.progress.name, 1.2);
+    } else if (h.by === this.player) {
+      this.hud.flash(`${ITEM_NAMES[h.kind]} HIT`, `+${ITEM_HIT_SCORE}`, 1.2);
+      this.addScore(ITEM_HIT_SCORE);
+    }
+  }
+
   private handleActions(): void {
     const a = this.input.actions;
     if (a.reset) this.resetPlayer();
+    if (a.usePickup) this.useItem(this.player);
     if (a.camera) this.rig.cycle();
     if (a.confirm) this.restartRace();
     if (a.debug) {
@@ -657,6 +731,7 @@ export class Game {
       },
       dt,
     );
+    this.hud.setItem(this.player.item, this.player.itemRoll > 0);
     this.stadium.tv.update(this.renderer, this.scene, this.player.renderPos, this.rigHeading(), dt);
     this.renderer.shadowMap.needsUpdate = true;
     this.renderer.render(this.scene, this.camera);

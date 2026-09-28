@@ -1,3 +1,4 @@
+import { ITEM_ICONS, ITEM_KINDS, type ItemKind } from '../race/Items';
 /**
  * DOM HUD, laid out like the reference: lap + pickup slot top-left, race time top-right,
  * position bottom-left, speedometer (mph + arc of lights) bottom-right, pop-ups in the centre,
@@ -68,10 +69,10 @@ export class Hud {
       <div class="hud-banner" id="hud-banner"></div>
       <div class="hud-results" id="hud-results"></div>
       <div class="hud-hint" id="hud-hint">
-        <b>W A S D</b> / arrows drive · <b>Space</b> handbrake (drift!) · <b>R</b> reset · <b>C</b> camera · <b>Enter</b> restart · gamepad: RT/LT, stick, A
+        <b>W A S D</b> / arrows drive · <b>Space</b> handbrake (drift!) · <b>R</b> reset · <b>C</b> camera · <b>Shift</b>/<b>E</b> use item · <b>Enter</b> restart · gamepad: RT/LT, stick, A, B = item
       </div>
       <pre class="hud-debug" id="hud-debug"></pre>`;
-    for (const id of ['lap', 'time', 'best', 'score', 'pos', 'pos-suf', 'pos-of', 'mph', 'popup', 'count', 'banner', 'results', 'hint', 'debug', 'slot-icon']) {
+    for (const id of ['lap', 'time', 'best', 'score', 'pos', 'pos-suf', 'pos-of', 'mph', 'popup', 'count', 'banner', 'results', 'hint', 'debug', 'slot', 'slot-icon']) {
       this.el[id] = root.querySelector(`#hud-${id}`)!;
     }
     const lightsEl = root.querySelector('.hud-lights')!;
@@ -94,6 +95,18 @@ export class Hud {
     if (this.last[id] === text) return;
     this.last[id] = text;
     this.el[id].textContent = text;
+  }
+
+  private slotKey = '';
+  /** Pickup slot: the item's icon, a flicking roulette while it's rolling, empty when null. */
+  setItem(kind: ItemKind | null, rolling: boolean): void {
+    const shown: ItemKind | null = rolling ? ITEM_KINDS[Math.floor(performance.now() / 85) % ITEM_KINDS.length] : kind;
+    const key = `${shown}|${rolling}`;
+    if (key === this.slotKey) return;
+    this.slotKey = key;
+    this.el['slot-icon'].style.backgroundImage = shown ? ITEM_ICONS[shown] : 'none';
+    this.el.slot.classList.toggle('rolling', rolling);
+    this.el.slot.classList.toggle('ready', !!kind && !rolling);
   }
 
   setScore(points: number): void {

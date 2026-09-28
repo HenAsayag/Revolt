@@ -197,5 +197,5 @@ export function installDevTools(game: Game): void {
     return { laps: pp.lapTimes.map((t) => +t.toFixed(1)), resets, hits: hits.filter((h) => !h.startsWith('R')).length, hitLog: hits.join(' '), landings: landings.join(' ') };
   };
 
-  (window as unknown as { __test: unknown }).__test = { pilot, lap, race, naive, track, game };
+  (window as unknown as { __test: unknown }).__test = { pilot, lap, race, naive, track, game, items: () => JSON.stringify(game.itemStats) };
 }

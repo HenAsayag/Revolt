@@ -13,6 +13,8 @@ export const GROUP = {
   BALL: 1 << 5,
   /** Invisible driving surfaces laid over stair noses (only cars touch them). */
   GLIDE: 1 << 6,
+  /** Thrown items (bombs): bounce off scenery and props, pass through cars (hits are proximity checks). */
+  PROJECTILE: 1 << 7,
 } as const;
 
 export const groups = (membership: number, filter: number) => (((membership & 0xffff) << 16) | (filter & 0xffff)) >>> 0;
@@ -30,5 +32,6 @@ export const CAR_SENSOR_GROUPS = groups(GROUP.CAR_SENSOR, GROUP.CONE | GROUP.BAL
 export const PAD_GROUPS = groups(GROUP.PICKUP, GROUP.CAR);
 /** Glide slabs only exist for cars (props fall through to the real steps). */
 export const GLIDE_GROUPS = groups(GROUP.GLIDE, GROUP.CAR);
+export const PROJECTILE_GROUPS = groups(GROUP.PROJECTILE, 0xffff & ~(GROUP.CAR | GROUP.CAR_SENSOR | GROUP.PICKUP | GROUP.GLIDE | GROUP.PROJECTILE));
 /** Suspension rays only see solid scenery (and other cars). */
-export const WHEEL_RAY_GROUPS = groups(GROUP.CAR, 0xffff & ~(GROUP.CONE | GROUP.BALL | GROUP.PICKUP));
+export const WHEEL_RAY_GROUPS = groups(GROUP.CAR, 0xffff & ~(GROUP.CONE | GROUP.BALL | GROUP.PICKUP | GROUP.PROJECTILE));

@@ -98,7 +98,8 @@ export class Input {
       a.reset ||= t.reset;
       a.camera ||= t.camera;
       a.confirm ||= t.confirm;
-      t.reset = t.camera = t.confirm = false;
+      a.usePickup ||= t.item;
+      t.reset = t.camera = t.confirm = t.item = false;
     }
 
     this.drive.throttle = Math.max(-1, Math.min(1, throttle));

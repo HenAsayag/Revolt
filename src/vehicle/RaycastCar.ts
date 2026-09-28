@@ -76,6 +76,8 @@ export class RaycastCar {
   throttleLoad = 0;
   /** Seconds of boost left (boost pads, drift boosts, lightning pickup). */
   boostTime = 0;
+  /** Hit by an item: no power, loose tyres and no stability help for this long (s). */
+  stunTime = 0;
   /** Signed slip angle of the body over the ground, radians (+ = nose left of travel). */
   slipAngle = 0;
   /** Current drift length, seconds; released drifts longer than ~0.7 s pay out a boost. */
@@ -93,7 +95,7 @@ export class RaycastCar {
   readonly fwd = new THREE.Vector3(0, 0, 1);
   readonly left = new THREE.Vector3(1, 0, 0);
 
-  private readonly principalInertia: THREE.Vector3;
+  readonly principalInertia: THREE.Vector3;
   private readonly ray: RAPIER.Ray;
 
   constructor(
@@ -173,6 +175,12 @@ export class RaycastCar {
   /** Apply this step's forces (call before `world.step()`, then `postStep()` after it). */
   step(dt: number, input: DriveInput): void {
     const cfg = this.cfg;
+    const stunned = this.stunTime > 0;
+    if (stunned) {
+      this.stunTime = Math.max(0, this.stunTime - dt);
+      this.boostTime = 0;
+      input = { throttle: 0, steer: input.steer * 0.3, handbrake: false };
+    }
     const body = this.body;
     this.readPose();
 
@@ -303,7 +311,7 @@ export class RaycastCar {
       const vLat = pv.x * _ws.x + pv.y * _ws.y + pv.z * _ws.z;
 
       const handbraking = input.handbrake && !wheel.front;
-      const mu = wheel.front ? cfg.gripFront : cfg.gripRear * (handbraking ? cfg.handbrakeRearGrip : 1);
+      const mu = (wheel.front ? cfg.gripFront : cfg.gripRear * (handbraking ? cfg.handbrakeRearGrip : 1)) * (stunned ? 0.45 : 1);
       // Blend real load with static load so grip doesn't flicker as the springs bounce.
       const staticLoad = (cfg.mass * 9.81) / 4;
       const maxF = mu * (0.6 * f + 0.4 * staticLoad);
@@ -351,8 +359,8 @@ export class RaycastCar {
       body.setAngularDamping(cfg.airAngularDamping);
     } else {
       this.slipAngle = this.computeSlip(linvel);
-      if (grounded >= 3 && !input.handbrake) this.stabilizeYaw(dt);
-      if (grounded >= 2 && !input.handbrake) this.yawControl(dt, input);
+      if (grounded >= 3 && !input.handbrake && !stunned) this.stabilizeYaw(dt);
+      if (grounded >= 2 && !input.handbrake && !stunned) this.yawControl(dt, input);
       this.trackDrift(dt, input, grounded);
       if (this.airTime > 0) this.lastAirTime = this.airTime;
       this.airTime = 0;
@@ -498,6 +506,7 @@ export class RaycastCar {
     this.lastAirTime = 0;
     this.boostTime = 0;
     this.driftTime = 0;
+    this.stunTime = 0;
     this.readPose();
     this.prevPos.copy(this.pos);
     this.prevQuat.copy(this.quat);
