@@ -16,9 +16,12 @@ import { Track } from '../track/Track';
 import { buildTrack, type BuiltTrack } from '../track/TrackBuilder';
 import { CONTROL_POINTS, FEATURES } from '../track/trackData';
 import { formatTime, ordinal, RaceManager, type RaceEvent, type RacerProgress } from '../race/RaceManager';
+import { AI_ROSTER, AIDriver } from '../race/AIDriver';
 
 const MPH = 2.23694;
 const LAPS = 3;
+/** Grid slot the player starts from (0 = pole); the AI fill the rest. */
+const PLAYER_SLOT = 5;
 const MAX_STEPS_PER_FRAME = 8;
 /** Extra acceleration toward the loop surface, m/s² (gravity alone would need ~12 m/s at the entry). */
 const LOOP_STICK = 9;
@@ -28,10 +31,17 @@ const GUIDE_K = 22;
 const GUIDE_D = 4;
 const GUIDE_MAX = 45;
 
-/** A car plus its look; the game keeps a list so AI cars slot in the same way later. */
+/** A car plus its look, its driver (AI or the player) and its race state. */
 interface Racer {
   car: RaycastCar;
   visual: CarVisual;
+  /** Null for the player. */
+  ai: AIDriver | null;
+  progress: RacerProgress;
+  /** This frame's controls. */
+  input: DriveInput;
+  /** Last stair step index per axle (front, rear), for the stair hops. */
+  stairStep: number[];
   /** Interpolated render pose. */
   renderPos: THREE.Vector3;
   renderQuat: THREE.Quaternion;
@@ -70,8 +80,8 @@ export class Game {
   score = 0;
   private loopProgress = 0;
   private loopShot: THREE.Vector3 | null = null;
-  /** Last stair step index per axle (front, rear), for the stair hops. */
-  private stairStep = [-1, -1];
+  /** Who last kicked each football (goals only score for the player's kicks). */
+  private readonly ballKicker = new Map<number, Racer>();
   private lastDriftBoosts = 0;
   private readonly events = new RAPIER.EventQueue(true);
   /** Collider handle → racer, to attribute collision events. */
@@ -107,7 +117,20 @@ export class Game {
       this.loopShot.y = 2.4;
     }
     const grid = this.track.gridSlots(this.trackBuild.startS, 8);
-    this.player = this.addRacer(0, grid[0].pos, grid[0].yaw);
+    // Player mid-grid; the AI fill the other slots (fastest nearest the front).
+    this.player = this.addRacer(0, grid[PLAYER_SLOT].pos, grid[PLAYER_SLOT].yaw);
+    const aiSlots = grid.map((_, i) => i).filter((i) => i !== PLAYER_SLOT);
+    // AI keep to the centre line over the boost pads and through the loop.
+    const centre: [number, number][] = this.trackBuild.pads.meshes.map((m) => {
+      const s = this.track.project(m.position).s;
+      return [s - 5, s + 1];
+    });
+    if (this.trackBuild.loopSpan) centre.push([this.trackBuild.loopSpan[0] - 8, this.trackBuild.loopSpan[1]]);
+    AI_ROSTER.forEach((p, k) => {
+      const slot = grid[aiSlots[k]];
+      const r = this.addRacer(k + 1, slot.pos, slot.yaw);
+      r.ai = new AIDriver(r.car, this.track, p, centre);
+    });
 
     // One step so scene queries see the static colliders, then lay out the checkpoints.
     this.world.step();
@@ -119,7 +142,8 @@ export class Game {
     const loop = this.trackBuild.loopSpan;
     if (loop) noRespawn.push([loop[0] - 14, loop[1]]);
     this.race = new RaceManager(this.track, this.trackBuild.startS, LAPS, this.world, noRespawn);
-    this.playerProgress = this.race.addRacer(this.player.car, 'YOU');
+    for (const r of this.racers) r.progress = this.race.addRacer(r.car, r.ai ? r.ai.p.name : 'YOU');
+    this.playerProgress = this.player.progress;
     this.buildCheckpointMarkers();
     const sightRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
     this.rig = new CameraRig(this.camera, (from, to) => {
@@ -144,7 +168,10 @@ export class Game {
     const car = new RaycastCar(this.world, DEFAULT_CAR, pos, yaw);
     const visual = new ProceduralBuggy(DEFAULT_CAR, LIVERIES[liveryIndex % LIVERIES.length]);
     this.scene.add(visual.root);
-    const racer = { car, visual, renderPos: car.pos.clone(), renderQuat: car.quat.clone() };
+    const racer: Racer = {
+      car, visual, ai: null, progress: null!, input: { throttle: 0, steer: 0, handbrake: true }, stairStep: [-1, -1],
+      renderPos: car.pos.clone(), renderQuat: car.quat.clone(),
+    };
     this.racers.push(racer);
     for (const c of car.colliders) this.racerByCollider.set(c.handle, racer);
     this.racerByCollider.set(car.sensor.handle, racer);
@@ -200,9 +227,19 @@ export class Game {
   private update(dt: number): void {
     this.input.poll();
     this.handleActions();
-    let drive = this.autopilot ? this.autopilot(this.player.car, this.simTime) : this.input.drive;
-    // Grid hold during the countdown: steer all you like, but the handbrake is on.
-    if (this.race.phase === 'countdown') drive = { throttle: 0, steer: drive.steer, handbrake: true };
+    const drive = this.autopilot ? this.autopilot(this.player.car, this.simTime) : this.input.drive;
+    const countdown = this.race.phase === 'countdown';
+    const allCars = this.racers.map((r) => r.car);
+    for (const r of this.racers) {
+      let d = drive;
+      if (r.ai) {
+        d = r.ai.drive(dt, { gapToPlayer: r.progress.progress - this.playerProgress.progress, others: allCars, racing: this.race.racing });
+        // Finished AI cruise on at an easy pace.
+        if (r.progress.finished) d = { throttle: Math.min(d.throttle, 0.35), steer: d.steer, handbrake: false };
+      }
+      // Grid hold during the countdown: steer all you like, but the handbrake is on.
+      r.input = countdown ? { throttle: 0, steer: d.steer, handbrake: true } : d;
+    }
 
     const pc = this.player.car;
     const wasAirborne = pc.airTime;
@@ -210,7 +247,7 @@ export class Game {
     this.accumulator += dt;
     let steps = 0;
     while (this.accumulator >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
-      for (const r of this.racers) r.car.step(FIXED_DT, r === this.player ? drive : { throttle: 0, steer: 0, handbrake: false });
+      for (const r of this.racers) r.car.step(FIXED_DT, r.input);
       this.world.step(this.events);
       this.handleCollisions();
       for (const r of this.racers) r.car.postStep();
@@ -236,6 +273,9 @@ export class Game {
     }
     // Fell out of the world.
     if (pc.pos.y < -10) this.resetPlayer();
+    for (const r of this.racers) {
+      if (r.ai && (r.ai.wantsRespawn || r.car.pos.y < -10)) this.respawn(r);
+    }
     // Stuck on its roof → remind the player about reset.
     this.flippedFor = pc.isUpsideDown && pc.speed < 1 ? this.flippedFor + dt : 0;
     if (this.flippedFor > 1.2) {
@@ -257,12 +297,14 @@ export class Game {
         if (mine) this.hud.flash(e.best && e.lap > 1 ? 'BEST LAP' : `LAP ${e.lap}`, formatTime(e.time), 2);
         break;
       case 'finalLap':
-        if (mine) setTimeout(() => this.hud.flash('FINAL LAP', '', 1.6), 1800);
+        if (mine) this.later(1800, () => this.hud.flash('FINAL LAP', '', 1.6));
         break;
       case 'finish':
         if (mine) {
           this.hud.flash('FINISH!', `${e.place}${ordinal(e.place)}`, 2.5);
-          setTimeout(() => this.showResults(), 1500);
+          this.later(1500, () => this.showResults());
+        } else if (this.playerProgress.finished) {
+          this.showResults(); // someone else crossed the line: refresh the table
         }
         break;
       case 'wrongWay':
@@ -283,10 +325,27 @@ export class Game {
     this.hud.showResults(rows, 'Press ENTER to race again');
   }
 
+  /** Race number, so delayed pop-ups from a previous race never fire into the next one. */
+  private raceId = 0;
+
+  private later(ms: number, fn: () => void): void {
+    const id = this.raceId;
+    setTimeout(() => id === this.raceId && fn(), ms);
+  }
+
   /** Everyone back to the grid, props reset, countdown again. */
   restartRace(): void {
+    this.raceId++;
     const grid = this.track.gridSlots(this.trackBuild.startS, 8);
-    this.racers.forEach((r, i) => r.car.reset(grid[i].pos, grid[i].yaw));
+    const aiSlots = grid.map((_, i) => i).filter((i) => i !== PLAYER_SLOT);
+    let k = 0;
+    for (const r of this.racers) {
+      const slot = grid[r.ai ? aiSlots[k++] : PLAYER_SLOT];
+      r.car.reset(slot.pos, slot.yaw);
+      r.ai?.reset();
+      r.stairStep = [-1, -1];
+    }
+    this.ballKicker.clear();
     this.trackBuild.cones.reset();
     this.trackBuild.balls.reset();
     this.race.restart();
@@ -294,7 +353,6 @@ export class Game {
     this.hud.setScore(0);
     this.hud.hideResults();
     this.loopProgress = 0;
-    this.stairStep = [-1, -1];
     this.lastDriftBoosts = this.player.car.driftBoosts;
     this.playerTrackIndex = -1;
     this.rig.snap();
@@ -323,16 +381,21 @@ export class Game {
 
   /** Loop grip + LOOP BONUS, goals, drift-boost pop-ups. */
   private updateSetPieces(dt: number): void {
+    const stands = this.trackBuild.zones.stands;
+    for (const r of this.racers) {
+      const c = r.car;
+      const idx = r === this.player ? this.playerTrackIndex : r.ai!.hint;
+      const at = this.track.samples[Math.max(0, idx)];
+      this.stairHops(c, at.s, r.stairStep);
+      if (stands && this.track.forwardDistance(stands[0], at.s) <= this.track.forwardDistance(stands[0], stands[1])) {
+        this.guideAlong(c, at, dt);
+      }
+      // Inside the loop: press the car onto the surface (only while it's actually on it).
+      c.surfaceStick = at.loop && c.groundedCount >= 2 ? LOOP_STICK : at.loop ? 2 : 0;
+    }
     const pc = this.player.car;
     const smp = this.track.samples[Math.max(0, this.playerTrackIndex)];
     const span = this.trackBuild.loopSpan;
-    this.stairHops(pc, smp.s);
-    const stands = this.trackBuild.zones.stands;
-    if (stands && this.track.forwardDistance(stands[0], smp.s) <= this.track.forwardDistance(stands[0], stands[1])) {
-      this.guideAlong(pc, smp, dt);
-    }
-    // Inside the loop: press the car onto the surface (only while it's actually on it).
-    pc.surfaceStick = smp.loop && pc.groundedCount >= 2 ? LOOP_STICK : smp.loop ? 2 : 0;
     if (span) {
       if (smp.loop) {
         this.loopProgress = Math.max(this.loopProgress, this.track.forwardDistance(span[0], smp.s));
@@ -347,9 +410,9 @@ export class Game {
       }
     }
     for (const goal of this.trackBuild.balls.update(dt)) {
+      if (this.ballKicker.get(goal.ball) !== this.player) continue;
       this.hud.flash('GOAL!', '+500', 2);
       this.addScore(500);
-      void goal;
     }
     if (pc.driftBoosts !== this.lastDriftBoosts) {
       this.lastDriftBoosts = pc.driftBoosts;
@@ -379,18 +442,18 @@ export class Game {
   }
 
   /** Bouncing down the aisle: each axle gets a kick as it passes a step edge. */
-  private stairHops(car: RaycastCar, s: number): void {
+  private stairHops(car: RaycastCar, s: number, stairStep: number[]): void {
     for (const b of this.trackBuild.bumps) {
       const span = this.track.forwardDistance(b.s0, b.s1);
       const axles = [car.cfg.frontAxleZ, car.cfg.rearAxleZ];
       axles.forEach((az, a) => {
         const d = this.track.forwardDistance(b.s0, s + az);
         if (d > span || car.groundedCount === 0) {
-          if (d > span) this.stairStep[a] = -1;
+          if (d > span) stairStep[a] = -1;
           return;
         }
         const step = Math.floor(d / b.pitch);
-        if (step !== this.stairStep[a] && this.stairStep[a] !== -1) {
+        if (step !== stairStep[a] && stairStep[a] !== -1) {
           // Same kick on both wheels of the axle (uneven kicks would slew the car sideways).
           const kick = (car.cfg.mass / 4) * b.strength * (0.85 + Math.random() * 0.3);
           for (const w of car.wheels.filter((wh) => wh.front === (a === 0))) {
@@ -399,7 +462,7 @@ export class Game {
             car.body.applyImpulseAtPoint({ x: car.up.x * j, y: car.up.y * j, z: car.up.z * j }, { x: at.x, y: at.y, z: at.z }, true);
           }
         }
-        this.stairStep[a] = step;
+        stairStep[a] = step;
       });
     }
   }
@@ -418,7 +481,7 @@ export class Game {
       }
       const ball = balls.byCollider.get(h1) ?? balls.byCollider.get(h2);
       if (ball !== undefined) {
-        balls.kick(ball, racer.car.body.linvel(), racer.car.pos);
+        if (balls.kick(ball, racer.car.body.linvel(), racer.car.pos)) this.ballKicker.set(ball, racer);
         return;
       }
       const cone = cones.byCollider.get(h1) ?? cones.byCollider.get(h2);
@@ -446,10 +509,19 @@ export class Game {
 
   /** Back onto the track at the last safe spot behind the car (never before its last checkpoint). */
   resetPlayer(): void {
-    const spot = this.race.respawnFor(this.playerProgress);
-    this.player.car.reset(spot.pos, spot.yaw);
+    this.respawn(this.player);
     this.playerTrackIndex = -1;
     this.rig.snap();
+  }
+
+  private respawn(r: Racer): void {
+    const spot = this.race.respawnFor(r.progress);
+    r.car.reset(spot.pos, spot.yaw);
+    r.stairStep = [-1, -1];
+    if (r.ai) {
+      r.ai.reset();
+      r.ai.stats.respawns++;
+    }
   }
 
   private render(dt: number): void {

@@ -1,8 +1,19 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { CarConfig } from './CarConfig';
 import type { CarVisual, Livery } from './CarVisual';
 import type { RaycastCar } from './RaycastCar';
 import { checkerTexture, numberDecalTexture, treadTexture } from '../render/textures';
+
+/** Give a geometry a flat per-vertex colour (linear), so differently coloured parts can share one mesh. */
+function tint(geo: THREE.BufferGeometry, color: THREE.ColorRepresentation): THREE.BufferGeometry {
+  const c = new THREE.Color(color);
+  const n = geo.attributes.position.count;
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) col.set([c.r, c.g, c.b], i * 3);
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return geo;
+}
 
 /** Side profile (z, y) extruded across the car's width. */
 function profileExtrude(points: [number, number][], width: number, bevel = 0.008): THREE.BufferGeometry {
@@ -34,6 +45,8 @@ let shared: {
   headMat: THREE.MeshStandardMaterial;
   tailMat: THREE.MeshStandardMaterial;
   antennaMat: THREE.MeshStandardMaterial;
+  bodyMat: THREE.MeshPhysicalMaterial;
+  hubMat: THREE.MeshStandardMaterial;
   tipMat: THREE.MeshStandardMaterial;
 } | null = null;
 
@@ -59,6 +72,8 @@ function getShared(cfg: CarConfig) {
     headMat: new THREE.MeshStandardMaterial({ color: '#fff6c8', emissive: '#fff1a8', emissiveIntensity: 0.6 }),
     tailMat: new THREE.MeshStandardMaterial({ color: '#ff2a2a', emissive: '#c00000', emissiveIntensity: 0.5 }),
     antennaMat: new THREE.MeshStandardMaterial({ color: '#0d0d0d', roughness: 0.4 }),
+    bodyMat: new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.32, metalness: 0.05, clearcoat: 0.7, clearcoatRoughness: 0.2 }),
+    hubMat: new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.3 }),
     tipMat: new THREE.MeshStandardMaterial({ color: '#ff1414', emissive: '#8a0000', emissiveIntensity: 0.4, roughness: 0.4 }),
   };
   return shared;
@@ -86,81 +101,61 @@ export class ProceduralBuggy implements CarVisual {
 
   constructor(private readonly cfg: CarConfig, livery: Livery) {
     const s = getShared(cfg);
-    const bodyMat = new THREE.MeshPhysicalMaterial({
-      color: livery.body, roughness: 0.32, metalness: 0.05, clearcoat: 0.7, clearcoatRoughness: 0.2,
-    });
-    const accentMat = new THREE.MeshStandardMaterial({ color: livery.accent, roughness: 0.5 });
-    const rimMat = new THREE.MeshStandardMaterial({ color: livery.rim, roughness: 0.35, metalness: 0.3 });
+    // Eight of these race at once, so the static parts are merged into a handful of meshes:
+    // one vertex-coloured body, the roof, the decals, and per wheel a tyre + a hub.
     const roofMat =
       livery.roof === 'checker'
         ? new THREE.MeshStandardMaterial({ map: checkerTexture(6), roughness: 0.35 })
         : new THREE.MeshStandardMaterial({ color: livery.roof, roughness: 0.35 });
     const decalMat = new THREE.MeshStandardMaterial({ map: numberDecalTexture(livery.number), transparent: true, roughness: 0.4 });
-    this.owned.push(bodyMat, accentMat, rimMat, roofMat, decalMat);
+    this.owned.push(roofMat, decalMat);
 
-    const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0, parent: THREE.Object3D = this.root) => {
+    const mesh = (geo: THREE.BufferGeometry, mat: THREE.Material, parent: THREE.Object3D = this.root, shadow = true) => {
       const m = new THREE.Mesh(geo, mat);
-      m.position.set(x, y, z);
-      m.castShadow = true;
+      m.castShadow = shadow;
       m.receiveShadow = true;
       parent.add(m);
+      this.owned.push(geo);
       return m;
     };
-    const box = (w: number, h: number, d: number) => {
-      const g = new THREE.BoxGeometry(w, h, d);
-      this.owned.push(g);
-      return g;
-    };
+    const box = (w: number, h: number, d: number) => new THREE.BoxGeometry(w, h, d);
 
-    // Chassis tub + bumpers.
-    add(box(0.22, 0.034, 0.46), s.chassisMat, 0, -0.03, 0);
-    add(box(0.25, 0.036, 0.045), s.blackMat, 0, -0.018, 0.262);
-    add(box(0.23, 0.04, 0.04), s.blackMat, 0, -0.012, -0.252);
-
-    // Body shell.
-    const shell = profileExtrude(
+    // --- Body: every static part, coloured per vertex, one draw call.
+    const body: THREE.BufferGeometry[] = [];
+    const part = (g: THREE.BufferGeometry, color: THREE.ColorRepresentation) => body.push(tint(g, color));
+    part(box(0.22, 0.034, 0.46).translate(0, -0.03, 0), '#2a2b2e'); // chassis tub
+    part(box(0.25, 0.036, 0.045).translate(0, -0.018, 0.262), '#161616'); // bumpers
+    part(box(0.23, 0.04, 0.04).translate(0, -0.012, -0.252), '#161616');
+    part(profileExtrude(
       [[-0.235, -0.012], [0.25, -0.012], [0.25, 0.034], [0.218, 0.058], [0.11, 0.078], [-0.2, 0.084], [-0.235, 0.074]],
       0.24,
-    );
-    const cabin = profileExtrude([[-0.145, 0.07], [0.105, 0.07], [0.035, 0.148], [-0.1, 0.143]], 0.2, 0.006);
-    this.owned.push(shell, cabin);
-    add(shell, bodyMat);
-    add(cabin, s.glassMat);
-    const roof = add(box(0.19, 0.008, 0.13), roofMat, 0, 0.151, -0.032);
-    roof.rotation.x = 0.03;
-
-    // Accent stripe along the flanks + side number decals.
-    add(box(0.244, 0.012, 0.36), accentMat, 0, 0.018, 0.0);
-    const decalGeo = new THREE.PlaneGeometry(0.075, 0.075);
-    this.owned.push(decalGeo);
+    ), livery.body);
+    part(profileExtrude([[-0.145, 0.07], [0.105, 0.07], [0.035, 0.148], [-0.1, 0.143]], 0.2, 0.006), '#15181d'); // glass
+    part(box(0.244, 0.012, 0.36).translate(0, 0.018, 0), livery.accent); // flank stripe
+    part(box(0.27, 0.008, 0.075).rotateX(-0.12).translate(0, 0.145, -0.205), livery.accent); // wing
     for (const side of [1, -1]) {
-      const d = add(decalGeo, decalMat, side * 0.1225, 0.045, -0.04);
-      d.rotation.y = side * Math.PI / 2;
-      d.castShadow = false;
+      part(box(0.008, 0.06, 0.022).translate(side * 0.075, 0.112, -0.2), '#161616'); // wing struts
+      part(box(0.045, 0.018, 0.01).translate(side * 0.072, 0.03, 0.26), '#fff6c8'); // headlights
+      part(box(0.04, 0.016, 0.01).translate(side * 0.075, 0.052, -0.245), '#ff2a2a'); // tail lights
     }
-
-    // Lights.
-    for (const side of [1, -1]) {
-      add(box(0.045, 0.018, 0.01), s.headMat, side * 0.072, 0.03, 0.26).castShadow = false;
-      add(box(0.04, 0.016, 0.01), s.tailMat, side * 0.075, 0.052, -0.245).castShadow = false;
-    }
-
-    // Rear wing on two struts.
-    const wing = add(box(0.27, 0.008, 0.075), accentMat, 0, 0.145, -0.205);
-    wing.rotation.x = -0.12;
-    for (const side of [1, -1]) add(box(0.008, 0.06, 0.022), s.blackMat, side * 0.075, 0.112, -0.2);
+    mesh(mergeGeometries(body.map((g) => (g.index ? g.toNonIndexed() : g)))!, s.bodyMat);
+    mesh(box(0.19, 0.008, 0.13).rotateX(0.03).translate(0, 0.151, -0.032), roofMat);
+    const decals = [1, -1].map((side) => new THREE.PlaneGeometry(0.075, 0.075).rotateY((side * Math.PI) / 2).translate(side * 0.1225, 0.045, -0.04));
+    mesh(mergeGeometries(decals)!, decalMat, this.root, false);
 
     // Antenna (rear right), pivoting at its base.
     this.antenna.position.set(-0.075, 0.085, -0.16);
     this.root.add(this.antenna);
     const antLen = 0.36;
-    const antGeo = new THREE.CylinderGeometry(0.0022, 0.0035, antLen, 5).translate(0, antLen / 2, 0);
-    const tipGeo = new THREE.SphereGeometry(0.011, 10, 8);
-    this.owned.push(antGeo, tipGeo);
-    add(antGeo, s.antennaMat, 0, 0, 0, this.antenna);
-    add(tipGeo, s.tipMat, 0, antLen, 0, this.antenna);
+    mesh(new THREE.CylinderGeometry(0.0022, 0.0035, antLen, 5).translate(0, antLen / 2, 0), s.antennaMat, this.antenna);
+    mesh(new THREE.SphereGeometry(0.011, 10, 8).translate(0, antLen, 0), s.tipMat, this.antenna);
 
-    // Wheels: pivot (suspension travel + steering) → spinner (roll) → tyre, rim, spokes.
+    // Wheels: pivot (suspension travel + steering) → spinner (roll) → tyre + hub (rim and spokes).
+    const hub = mergeGeometries([
+      tint(s.rim.clone(), livery.rim),
+      ...[0, 1, 2].map((i) => tint(s.spoke.clone().rotateX((i * Math.PI) / 3).translate(cfg.wheelWidth * 0.4, 0, 0), '#161616')),
+    ].map((g) => (g.index ? g.toNonIndexed() : g)))!;
+    this.owned.push(hub);
     for (const [x, z] of [
       [cfg.halfTrack, cfg.frontAxleZ], [-cfg.halfTrack, cfg.frontAxleZ],
       [cfg.halfTrack, cfg.rearAxleZ], [-cfg.halfTrack, cfg.rearAxleZ],
@@ -170,13 +165,11 @@ export class ProceduralBuggy implements CarVisual {
       const spinner = new THREE.Group();
       spinner.scale.x = Math.sign(x); // mirror so spokes face outward on both sides
       pivot.add(spinner);
-      add(s.tire, s.tireMat, 0, 0, 0, spinner);
-      add(s.rim, rimMat, 0, 0, 0, spinner);
-      for (let i = 0; i < 3; i++) {
-        const sp = add(s.spoke, s.blackMat, cfg.wheelWidth * 0.4, 0, 0, spinner);
-        sp.rotation.x = (i * Math.PI) / 3;
-        sp.castShadow = false;
-      }
+      const tire = new THREE.Mesh(s.tire, s.tireMat);
+      tire.castShadow = tire.receiveShadow = true;
+      const h = new THREE.Mesh(hub, s.hubMat);
+      h.castShadow = true;
+      spinner.add(tire, h);
       this.root.add(pivot);
       this.wheelPivots.push(pivot);
       this.wheelSpinners.push(spinner);

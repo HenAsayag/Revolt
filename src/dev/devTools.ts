@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { DriveInput } from '../core/Input';
+import { AIDriver } from '../race/AIDriver';
 import type { Game } from '../game/Game';
 import type { RaycastCar } from '../vehicle/RaycastCar';
 
@@ -85,5 +86,41 @@ export function installDevTools(game: Game): void {
     return { raceLaps: race.lapTimes.map((t) => +t.toFixed(2)), lap: race.lap, finished: race.finished, times, flips, stuck: stuck > 4 ? { s: prevS.toFixed(0), pos: car.pos.toArray().map((v) => +v.toFixed(2)) } : null, score: game.score, log: log.join(' ') };
   };
 
-  (window as unknown as { __test: unknown }).__test = { pilot, lap, track, game };
+  /**
+   * A full race with the AI field; the player is driven by the pilot at `playerV` (0 = parked).
+   * Returns every racer's place, finish time, laps and (for the AI) respawns / reverses.
+   */
+  const race = (maxSeconds = 150, playerV = 17) => {
+    game.stop();
+    game.restartRace();
+    for (const r of game.racers) if (r.ai) r.ai.stats = { respawns: 0, reverses: 0, log: [] };
+    hint = -1;
+    // playerV < 0: the player's car gets an AI driver of its own (recovers from bumps and wedges).
+    const me = new AIDriver(game.player.car, track, { name: 'YOU', skill: -playerV / 18, lane: 0, seed: 9 });
+    let lastT = game.simTime;
+    game.autopilot = playerV > 0 ? pilot(playerV, 12)
+      : playerV < 0 ? (_car, t) => {
+        const d = me.drive(Math.max(1e-3, t - lastT), { gapToPlayer: 0, others: game.racers.map((r) => r.car), racing: game.race.racing });
+        lastT = t;
+        if (me.wantsRespawn) game.resetPlayer(), me.reset();
+        return d;
+      }
+      : () => ({ throttle: 0, steer: 0, handbrake: true });
+    game.simulate(maxSeconds, () => game.race.racers.every((r) => r.finished));
+    game.autopilot = null;
+    return game.race.standings().map((p, i) => {
+      const r = game.racers.find((x) => x.progress === p)!;
+      return {
+        place: i + 1,
+        name: p.name,
+        time: p.finished ? +p.finishTime.toFixed(2) : null,
+        laps: p.lapTimes.map((t) => +t.toFixed(1)),
+        lap: p.lap,
+        ...(r.ai ? r.ai.stats : {}),
+        at: r.car.pos.toArray().map((v) => +v.toFixed(1)),
+      };
+    });
+  };
+
+  (window as unknown as { __test: unknown }).__test = { pilot, lap, race, track, game };
 }
