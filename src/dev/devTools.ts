@@ -122,5 +122,80 @@ export function installDevTools(game: Game): void {
     });
   };
 
-  (window as unknown as { __test: unknown }).__test = { pilot, lap, race, track, game };
+  /**
+   * "Naive player": holds full gas, steers like a keyboard (left / nothing / right) with a human
+   * reaction delay, never brakes, presses R when stuck or on its roof. Solo (AI parked off-world).
+   * Measures how forgiving the controls are: wall hits, resets, landing attitude, lap times.
+   */
+  const naive = (laps = 2, maxSeconds = 120, opts: { delay?: number; look?: number; lift?: boolean } = {}) => {
+    const delay = opts.delay ?? 0.15;
+    const car = game.player.car;
+    game.stop();
+    game.restartRace();
+    for (const r of game.racers) if (r.ai) r.car.body.setEnabled(false);
+    game.simulate(3.05);
+    hint = -1;
+    const queue: { t: number; steer: number }[] = [];
+    let stuckFor = 0, flipFor = 0, resets = 0;
+    const hits: string[] = [], landings: string[] = [];
+    const speedHist: { t: number; v: number }[] = [];
+    let lastHit = -9, wasAir = 0, wasTouching = false;
+    game.autopilot = (c, t) => {
+      let p = track.project(c.pos, hint);
+      if (p.distance > 6) p = track.project(c.pos);
+      hint = p.index;
+      const target = track.pointAt(p.s + (opts.look ?? 2.5) + c.speed * 0.15, 0).sub(c.pos);
+      const ang = Math.atan2(target.dot(c.left), target.dot(c.fwd));
+      queue.push({ t, steer: Math.abs(ang) > 0.06 ? -Math.sign(ang) : 0 });
+      while (queue.length > 1 && queue[1].t <= t - delay) queue.shift();
+      // lift: a slightly smarter human who lets off the gas while steering hard at speed.
+      const steer = queue[0].steer;
+      const throttle = opts.lift && Math.abs(ang) > 0.35 && c.speed > 9 ? 0 : 1;
+      return { throttle, steer, handbrake: false };
+    };
+    game.simulate(maxSeconds, () => {
+      const t = game.simTime;
+      const c = car;
+      speedHist.push({ t, v: c.speed });
+      while (speedHist.length && speedHist[0].t < t - 0.25) speedHist.shift();
+      const vMax = Math.max(...speedHist.map((h) => h.v));
+      const s = track.samples[Math.max(0, hint)].s;
+      // Wall hit = the chassis touching a static collider while (mostly) upright and moving.
+      let touching = false;
+      for (const col of c.colliders) {
+        game.world.contactPairsWith(col, (o) => {
+          if (touching || o.isSensor() || !o.parent()?.isFixed()) return;
+          game.world.contactPair(col, o, (m) => {
+            if (m.numContacts() > 0 && Math.abs(m.normal().y) < 0.6) touching = true;
+          });
+        });
+      }
+      if (touching && !wasTouching && t - lastHit > 0.7 && vMax > 3) {
+        hits.push(`${s.toFixed(0)}:${vMax.toFixed(0)}→${c.speed.toFixed(0)}`);
+        lastHit = t;
+      }
+      wasTouching = touching;
+      if (wasAir > 0.4 && c.airTime === 0) {
+        const pitch = Math.asin(Math.max(-1, Math.min(1, c.fwd.y))) * 57.3, roll = Math.asin(Math.max(-1, Math.min(1, c.left.y))) * 57.3;
+        landings.push(`${s.toFixed(0)}:p${pitch.toFixed(0)}r${roll.toFixed(0)}`);
+      }
+      wasAir = c.airTime;
+      stuckFor = c.speed < 0.5 ? stuckFor + 1 / 60 : 0;
+      flipFor = c.isUpsideDown && !track.samples[Math.max(0, hint)].loop ? flipFor + 1 / 60 : 0;
+      if (stuckFor > 1.5 || flipFor > 1 || c.pos.y < -10) {
+        resets++;
+        hits.push(`R@${s.toFixed(0)}`);
+        game.resetPlayer();
+        hint = -1;
+        stuckFor = flipFor = 0;
+      }
+      return game.race.progressOf(car).lapTimes.length >= laps;
+    });
+    game.autopilot = null;
+    for (const r of game.racers) if (r.ai) r.car.body.setEnabled(true);
+    const pp = game.race.progressOf(car);
+    return { laps: pp.lapTimes.map((t) => +t.toFixed(1)), resets, hits: hits.filter((h) => !h.startsWith('R')).length, hitLog: hits.join(' '), landings: landings.join(' ') };
+  };
+
+  (window as unknown as { __test: unknown }).__test = { pilot, lap, race, naive, track, game };
 }

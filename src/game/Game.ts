@@ -25,6 +25,17 @@ const PLAYER_SLOT = 5;
 const MAX_STEPS_PER_FRAME = 8;
 /** Extra acceleration toward the loop surface, m/s² (gravity alone would need ~12 m/s at the entry). */
 const LOOP_STICK = 9;
+/** Speed floor on the loop while holding the gas (m/s), and the push that keeps it (m/s²). */
+const LOOP_MIN_SPEED = 9.5;
+const LOOP_PUSH = 14;
+/** Stand-deck speed cap: lateral acceleration it allows (m/s²) and the braking it may use (m/s²). */
+const DECK_GRIP = 11;
+const DECK_BRAKE = 12;
+/** Loop "rails": lateral pull gains (1/s², 1/s) and cap (m/s²). */
+const RAIL_K = 30;
+const RAIL_D = 8;
+const RAIL_MAX = 16;
+const _tmp = new THREE.Vector3();
 const BOOST_PAD_SECONDS = 1.1;
 /** Guide-rail assist gains in the stand section (rad/s² per rad, per rad/s, cap). */
 const GUIDE_K = 22;
@@ -42,6 +53,8 @@ interface Racer {
   input: DriveInput;
   /** Last stair step index per axle (front, rear), for the stair hops. */
   stairStep: number[];
+  /** How much the "rails" hold this car right now (0 = free, 1 = the loop). */
+  rail: number;
   /** Interpolated render pose. */
   renderPos: THREE.Vector3;
   renderQuat: THREE.Quaternion;
@@ -169,7 +182,7 @@ export class Game {
     const visual = new ProceduralBuggy(DEFAULT_CAR, LIVERIES[liveryIndex % LIVERIES.length]);
     this.scene.add(visual.root);
     const racer: Racer = {
-      car, visual, ai: null, progress: null!, input: { throttle: 0, steer: 0, handbrake: true }, stairStep: [-1, -1],
+      car, visual, ai: null, progress: null!, input: { throttle: 0, steer: 0, handbrake: true }, stairStep: [-1, -1], rail: 0,
       renderPos: car.pos.clone(), renderQuat: car.quat.clone(),
     };
     this.racers.push(racer);
@@ -238,7 +251,7 @@ export class Game {
         if (r.progress.finished) d = { throttle: Math.min(d.throttle, 0.35), steer: d.steer, handbrake: false };
       }
       // Grid hold during the countdown: steer all you like, but the handbrake is on.
-      r.input = countdown ? { throttle: 0, steer: d.steer, handbrake: true } : d;
+      r.input = countdown ? { throttle: 0, steer: d.steer, handbrake: true } : { ...d, steer: this.railSteer(r, d.steer) };
     }
 
     const pc = this.player.car;
@@ -389,9 +402,20 @@ export class Game {
       this.stairHops(c, at.s, r.stairStep);
       if (stands && this.track.forwardDistance(stands[0], at.s) <= this.track.forwardDistance(stands[0], stands[1])) {
         this.guideAlong(c, at, dt);
+        this.deckGovernor(c, at.s, dt);
+      }
+      // Loop run-in and ring: a slot-car pull onto the centre line (see railSteer).
+      if (r.rail >= 0.7) {
+        this.railPull(c, at, dt);
+        this.guideAlong(c, at, dt);
       }
       // Inside the loop: press the car onto the surface (only while it's actually on it).
       c.surfaceStick = at.loop && c.groundedCount >= 2 ? LOOP_STICK : at.loop ? 2 : 0;
+      // Holding the gas always carries you round the loop (a speed floor while on the ring).
+      if (at.loop && c.groundedCount >= 2 && r.input.throttle > 0 && c.forwardSpeed < LOOP_MIN_SPEED) {
+        const j = c.cfg.mass * LOOP_PUSH * dt;
+        c.body.applyImpulse({ x: c.fwd.x * j, y: c.fwd.y * j, z: c.fwd.z * j }, true);
+      }
     }
     const pc = this.player.car;
     const smp = this.track.samples[Math.max(0, this.playerTrackIndex)];
@@ -419,6 +443,68 @@ export class Game {
       this.hud.flash('DRIFT BOOST', `${pc.lastDriftBoost.toFixed(1)}s`, 1.2);
       this.addScore(Math.round(pc.lastDriftBoost * 60));
     }
+  }
+
+  /**
+   * "On rails" steering for the narrow set pieces. Through the loop (where the camera is side-on
+   * and left/right stops meaning anything) the car steers itself; on the run-in to the loop and
+   * the stand ramp the driver's input is blended with a pull toward the centre line.
+   */
+  private railSteer(r: Racer, steer: number): number {
+    const idx = r === this.player ? this.playerTrackIndex : r.ai!.hint;
+    r.rail = 0;
+    if (idx < 0) return steer;
+    const s = this.track.samples[idx].s;
+    const within = (span: [number, number] | null | undefined, before: number, after = 0) =>
+      !!span && this.track.forwardDistance(span[0] - before, s) <= this.track.forwardDistance(span[0] - before, span[1] + after);
+    const loop = this.trackBuild.loopSpan;
+    const stands = this.trackBuild.zones.stands;
+    const car = r.car;
+    let auto: number;
+    if (within(loop, 8, 1)) auto = 1;
+    else if (within(loop, 16)) auto = 0.7;
+    else if (within(stands, 14)) auto = 0.6; // incl. the tight S-bend lining up the ramp
+    else {
+      car.cornerAssist = true;
+      return steer;
+    }
+    r.rail = auto;
+    // The loop wants all the speed it can get: no corner-assist lift on the run-in.
+    car.cornerAssist = auto < 0.7;
+    const target = this.track.pointAt(s + 1.2 + car.speed * 0.1, 0).sub(car.pos);
+    const ang = Math.atan2(target.dot(car.left), target.dot(car.fwd));
+    const pilot = THREE.MathUtils.clamp(-ang * 2.2, -1, 1);
+    return THREE.MathUtils.clamp(pilot * auto + steer * (1 - auto), -1, 1);
+  }
+
+  /** Lateral spring-damper toward the centre line, capped (on top of the tyres' own grip). */
+  private railPull(car: RaycastCar, smp: { pos: THREE.Vector3; right: THREE.Vector3 }, dt: number): void {
+    if (car.groundedCount < 2) return;
+    const lat = _tmp.subVectors(car.pos, smp.pos).dot(smp.right);
+    const v = car.body.linvel();
+    const vLat = v.x * smp.right.x + v.y * smp.right.y + v.z * smp.right.z;
+    const a = THREE.MathUtils.clamp(-RAIL_K * lat - RAIL_D * vLat, -RAIL_MAX, RAIL_MAX);
+    const j = car.cfg.mass * a * dt;
+    car.body.applyImpulse({ x: smp.right.x * j, y: smp.right.y * j, z: smp.right.z * j }, true);
+  }
+
+  /**
+   * The raised deck in the stands turns tighter than full speed allows and has nowhere to run
+   * wide, so it quietly caps the speed to what the next few metres can take.
+   */
+  private deckGovernor(car: RaycastCar, s: number, dt: number): void {
+    if (car.groundedCount < 2) return;
+    let curv = 0;
+    for (let d = 0; d < 6; d++) {
+      const a = this.track.sampleAt(s + d).tangent, b = this.track.sampleAt(s + d + 1).tangent;
+      const ha = Math.hypot(a.x, a.z), hb = Math.hypot(b.x, b.z);
+      if (ha < 0.2 || hb < 0.2) continue;
+      curv = Math.max(curv, Math.acos(Math.min(1, (a.x * b.x + a.z * b.z) / (ha * hb))));
+    }
+    const vCap = THREE.MathUtils.clamp(Math.sqrt(DECK_GRIP / Math.max(curv, 1e-3)), 7, 30);
+    if (car.forwardSpeed <= vCap) return;
+    const j = -car.cfg.mass * Math.min(DECK_BRAKE, (car.forwardSpeed - vCap) / dt) * dt;
+    car.body.applyImpulse({ x: car.fwd.x * j, y: car.fwd.y * j, z: car.fwd.z * j }, true);
   }
 
   /**

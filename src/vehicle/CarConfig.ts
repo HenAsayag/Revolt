@@ -68,6 +68,8 @@ export interface CarConfig {
   /** Slip angle added on top of the grip-limited steer angle. */
   steerSlipAngle: number;
   steerSpeed: number; // rad/s the steering rack moves at low speed
+  /** Cap on the turn rate full lock asks for, rad/s (keeps low-speed steering calm). */
+  maxYawRate: number;
   /** Seconds from centre to full lock at standstill / at top speed (slower = finer control with digital input). */
   steerTimeLow: number;
   steerTimeHigh: number;
@@ -76,6 +78,12 @@ export interface CarConfig {
   yawLimit: number;
   yawAssistMax: number; // rad/s²
   steerReturnSpeed: number;
+
+  /** Corner assist: below this speed (m/s) it does nothing; above, holding a turn lifts
+   * this fraction of the power and brakes with up to this force (N). */
+  cornerFreeSpeed: number;
+  cornerLift: number;
+  cornerBrake: number;
 
   /** Boost: drive-force multiplier and top-speed multiplier while boosting. */
   boostDrive: number;
@@ -146,12 +154,16 @@ export const DEFAULT_CAR: CarConfig = {
   maxSteerHigh: 0.05,
   steerSlipAngle: 0.07,
   steerSpeed: 5,
+  maxYawRate: 2.0,
   steerTimeLow: 0.08,
   steerTimeHigh: 0.3,
   yawSettle: 7,
   yawLimit: 5,
   yawAssistMax: 22,
   steerReturnSpeed: 7,
+  cornerFreeSpeed: 9,
+  cornerLift: 0.8,
+  cornerBrake: 5,
 
   boostDrive: 2.1,
   boostTopSpeed: 1.32,
@@ -162,9 +174,9 @@ export const DEFAULT_CAR: CarConfig = {
   airKp: 14,
   airKd: 5,
   airMaxAccel: 28,
-  airFollowTrajectory: 0.55,
+  airFollowTrajectory: 0.3,
   airPitchBias: 0.35,
-  airRollBias: 0.3,
+  airRollBias: 0,
   airYawAccel: 3,
   airAngularDamping: 0.6,
   groundAngularDamping: 1.2,

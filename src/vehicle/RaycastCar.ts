@@ -60,6 +60,8 @@ export class RaycastCar {
 
   /** Current steering angle, radians, positive = right. */
   steerAngle = 0;
+  /** Corner assist (see CarConfig.cornerLift); the game switches it off where speed matters more. */
+  cornerAssist = true;
   /** Signed speed along the car's forward axis, m/s. */
   forwardSpeed = 0;
   speed = 0;
@@ -209,6 +211,17 @@ export class RaycastCar {
       brake = Math.abs(t) * cfg.brakeForce;
     } else if (t > 0) {
       drive = t * cfg.driveForce * Math.max(0, 1 - (Math.max(v, 0) / cfg.maxSpeed) ** 3);
+      // Corner assist: holding a turn at speed eases off the power and scrubs a little speed,
+      // so "full gas + steer" makes the corner instead of running wide into the wall. Uses the
+      // rack position (not the raw input), so quick lane-change taps at pace aren't penalised.
+      const lock = Math.abs(this.steerAngle) / Math.max(maxSteer, 1e-3);
+      const over = clamp((v - cfg.cornerFreeSpeed) / (cfg.maxSpeed - cfg.cornerFreeSpeed), 0, 1);
+      const holding = Math.sign(input.steer) === Math.sign(this.steerAngle) && Math.abs(input.steer) > 0.5;
+      if (this.cornerAssist && holding && !input.handbrake && lock > 0.4 && over > 0) {
+        const k = ((lock - 0.4) / 0.6) * over;
+        drive *= 1 - cfg.cornerLift * k;
+        brake = cfg.cornerBrake * k;
+      }
     } else if (t < 0) {
       drive = t * cfg.driveForce * 0.65 * Math.max(0, 1 - (Math.max(-v, 0) / cfg.maxReverseSpeed) ** 2);
     }
@@ -349,7 +362,7 @@ export class RaycastCar {
 
   /**
    * Airborne attitude assist: a PD controller eases the nose toward the flight path and
-   * level roll; the player biases it (throttle = nose down, steer = roll + a little yaw).
+   * level roll, so jumps land flat; brake lifts the nose a little, steering yaws.
    * Only active while roughly upright, so real tumbles still end on the roof.
    */
   private airControl(dt: number, input: DriveInput, linvel: THREE.Vector3): void {
@@ -365,7 +378,9 @@ export class RaycastCar {
       const roll = Math.asin(clamp(this.left.y, -1, 1)); // + = right side down
       const hSpeed = Math.hypot(linvel.x, linvel.z);
       const flightPitch = Math.atan2(linvel.y, Math.max(hSpeed, 1)) * cfg.airFollowTrajectory;
-      const targetPitch = flightPitch - input.throttle * cfg.airPitchBias;
+      // Everyone holds the gas over a jump, so throttle mustn't tip the nose; only the brake
+      // key lifts it a little (a deliberate trick for steep landings). Steering only yaws.
+      const targetPitch = flightPitch + Math.max(0, -input.throttle) * cfg.airPitchBias;
       const targetRoll = input.steer * cfg.airRollBias;
       // Pitch rate (nose up) is -wLeft; roll rate is +wFwd.
       const pAcc = cfg.airKp * (targetPitch - pitch) + cfg.airKd * wLeft;
@@ -429,12 +444,15 @@ export class RaycastCar {
     const av = this.body.angvel();
     const wUp = av.x * up.x + av.y * up.y + av.z * up.z;
     const wheelbase = cfg.frontAxleZ - cfg.rearAxleZ;
-    const rMax = (cfg.gripFront * 9.81) / Math.abs(v);
+    // Turn rate: what the tyres can hold, and never more than a keyboard can handle (a real RC
+    // car pirouettes at walking pace).
+    const rMax = Math.min((cfg.gripFront * 9.81) / Math.abs(v), cfg.maxYawRate);
     // Steering right (+) turns clockwise seen from above = negative yaw.
     const desired = clamp((-v * Math.tan(this.steerAngle)) / wheelbase, -rMax, rMax);
     const err = wUp - desired;
-    // Not steering: settle toward the requested rate. Steering: only fight over-rotation.
-    const overRotating = Math.abs(wUp) > Math.abs(desired) && (desired === 0 || Math.sign(wUp) === Math.sign(desired));
+    // Not steering: settle toward the requested rate. Steering: fight rotation beyond the request
+    // (over-rotating, or still turning one way while the driver counter-steers), never add turn-in.
+    const overRotating = Math.abs(wUp) > 0.05 && Math.sign(err) === Math.sign(wUp);
     const gain = Math.abs(input.steer) < 0.05 ? cfg.yawSettle : overRotating ? cfg.yawLimit : 0;
     if (gain === 0) return;
     const a = clamp(-gain * err, -cfg.yawAssistMax, cfg.yawAssistMax);
