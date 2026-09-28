@@ -77,6 +77,8 @@ export class ArcadeCar {
   pitchLean = 0;
   /** Invisible rival: touches nothing but the world (see setGhost). */
   ghost = false;
+  /** Surface grip multiplier, set by the game each frame (mud < 1). */
+  gripScale = 1;
 
   readonly prevPos = new THREE.Vector3();
   readonly prevQuat = new THREE.Quaternion();
@@ -268,7 +270,7 @@ export class ArcadeCar {
       this.left.crossVectors(this.up, h).normalize();
       if (contact) {
         // Carve: most of the velocity turns with the car (kart feel); the rest becomes a slide.
-        const carve = this.drifting ? 0.55 : stunned ? 0.2 : cfg.carve;
+        const carve = (this.drifting ? 0.55 : stunned ? 0.2 : cfg.carve) * (0.35 + 0.65 * this.gripScale);
         const vfNew = v.dot(h), vsNew = v.dot(this.left);
         vf = THREE.MathUtils.lerp(vfNew, vf, carve);
         vs = THREE.MathUtils.lerp(vsNew, vs, carve);
@@ -302,7 +304,7 @@ export class ArcadeCar {
       }
       // Faster than allowed (a boost ended, a long downhill): ease back.
       if (vf > top) vf -= Math.min(vf - top, 5 * dt);
-      const grip = stunned ? cfg.stunGrip : this.drifting ? cfg.driftGrip : cfg.grip;
+      const grip = (stunned ? cfg.stunGrip : this.drifting ? cfg.driftGrip : cfg.grip) * this.gripScale;
       vs *= Math.exp(-grip * dt);
       // Slopes pull along the surface; parked on one, stay put.
       const parked = Math.abs(t) < 0.05 && vAbs < 0.4 && !boosting;

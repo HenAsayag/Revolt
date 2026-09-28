@@ -22,6 +22,7 @@ import { aiWantsToUse, ITEM_NAMES, ItemWorld, PickupBoxes, rollItem, type ItemHi
 import { Sound, type SfxName } from '../audio/Sound';
 import { Particles } from '../render/Particles';
 import { loadSettings, Menu, type Difficulty, type Settings } from '../ui/Menu';
+import { IntroOverlay, type Caption } from '../ui/Intro';
 
 const MPH = 2.23694;
 /** Rival pace and rubber-band strength per difficulty. */
@@ -30,6 +31,26 @@ const DIFFICULTY: Record<Difficulty, { pace: number; band: number }> = {
   normal: { pace: 1, band: 1 },
   hard: { pace: 1.05, band: 0.5 },
 };
+/** Opening fly-through: camera shots [x, y, z] (each runs until `end` s), captions, GO and the end. */
+type V3 = [number, number, number];
+const INTRO_SHOTS: { end: number; from: V3; to: V3; lookFrom: V3; lookTo: V3 }[] = [
+  // Over the city toward the stadium.
+  { end: 3.6, from: [-165, 62, -125], to: [-105, 44, -80], lookFrom: [0, 8, 0], lookTo: [0, 4, 0] },
+  // Panorama across the whole bowl, from behind the East stand toward the main stand's roof.
+  { end: 7.6, from: [-70, 52, 64], to: [50, 46, 60], lookFrom: [0, 2, -10], lookTo: [0, 2, -14] },
+  // Low along the East-stand balcony, over the crowd.
+  { end: 11.4, from: [34, 8.7, 45.3], to: [-34, 8.6, 45.3], lookFrom: [22, 7.5, 47], lookTo: [-50, 7.6, 46.5] },
+  // Down onto the grid in the South stand, from behind the cars.
+  { end: 16.5, from: [-64.8, 9.5, 15], to: [-65.2, 8.65, 10.4], lookFrom: [-65.5, 7.95, 3], lookTo: [-65.5, 7.95, 1] },
+];
+const INTRO_CAPTIONS: Caption[] = [
+  { at: 0.5, until: 3.4, title: 'TEL AVIV · JAFFA', sub: 'Where the city meets the sea' },
+  { at: 4.1, until: 7.4, title: 'BLOOMFIELD STADIUM', sub: 'Opened 1962 · rebuilt 2019 · 29,000 seats' },
+  { at: 8.0, until: 11.2, title: 'TONIGHT, THE TRACK', sub: 'runs right through the stands' },
+  { at: 11.9, until: 14.2, title: '8 RC CARS', sub: 'One lap of the whole stadium' },
+];
+const INTRO_GO = 14.3;
+const INTRO_END = 16.5;
 /** Attract-mode demo race: effectively endless. */
 const DEMO_LAPS = 99;
 const CONFETTI = ['#ff4d4d', '#ffd21f', '#4dff88', '#4dc3ff', '#b36bff', '#ffffff'];
@@ -83,6 +104,8 @@ interface Racer {
   item: ItemKind | null;
   itemRoll: number;
   itemHeld: number;
+  /** Seconds spent fallen below the track (auto-respawn). */
+  fallenFor: number;
   /** Smoothed motor speed for the engine sound, particle emission accumulators, last-frame state. */
   rev: number;
   fxSmoke: number;
@@ -139,7 +162,9 @@ export class Game {
   readonly sound = new Sound();
   readonly menu: Menu;
   /** 'menu' = title screen over an AI demo race; 'paused' freezes the race under the pause menu. */
-  mode: 'menu' | 'race' | 'paused' = 'menu';
+  mode: 'intro' | 'menu' | 'race' | 'paused' = 'menu';
+  private readonly intro = new IntroOverlay();
+  private introT = 0;
   private difficulty = DIFFICULTY.normal;
   /** Smart steering for the player (menu: Steering → Assisted). */
   assistOn = true;
@@ -276,15 +301,16 @@ export class Game {
 
     window.addEventListener('resize', () => this.resize());
     this.resize();
-    this.enterMenu();
+    this.enterMenu(false);
   }
 
   // ------------------------------------------------------------------------------------------
   // Modes
 
-  /** Title screen over an endless AI demo race. */
-  enterMenu(): void {
+  /** Title screen over an endless AI demo race (`show` = false: the demo runs, no menu yet). */
+  enterMenu(show = true): void {
     this.mode = 'menu';
+    this.intro.hide();
     document.body.classList.add('in-menu');
     document.body.classList.remove('paused');
     this.race.laps = DEMO_LAPS;
@@ -297,8 +323,56 @@ export class Game {
     this.cutDemoCamera();
     this.rig.distance = 2.3;
     this.rig.height = 0.85;
+    if (show) this.menu.show('title');
+    else this.menu.hide();
+    this.sound.setMusicMode('menu');
+  }
+
+  /**
+   * The opening: a fly-through of Bloomfield with captions, ending on the grid in the South
+   * stand as the lights go green, then the title menu. Any key / tap skips it.
+   */
+  playIntro(): void {
+    this.enterMenu(false);
+    this.mode = 'intro';
+    this.restartRace(); // the field waits on the grid (countdown held) until the final shot
+    this.introT = 0;
+    this.intro.show();
+    this.sound.setMusicMode('race');
+    this.sound.cheer(0.5);
+  }
+
+  private finishIntro(): void {
+    if (this.mode !== 'intro') return;
+    if (this.race.phase === 'countdown') this.race.skipCountdown();
+    this.intro.hide();
+    this.mode = 'menu';
+    this.rig.snap();
     this.menu.show('title');
     this.sound.setMusicMode('menu');
+  }
+
+  /** Intro timeline: camera shot at time t (fly between from→to with easing), captions, cut fades. */
+  private introCamera(t: number): { fade: number; logo: boolean } {
+    const shots = INTRO_SHOTS;
+    let i = shots.findIndex((sh) => t < sh.end);
+    if (i < 0) i = shots.length - 1;
+    const sh = shots[i];
+    const start = i ? shots[i - 1].end : 0;
+    const u = THREE.MathUtils.clamp((t - start) / (sh.end - start), 0, 1);
+    const e = u * u * (3 - 2 * u) * 0.6 + u * 0.4; // mostly smooth, never quite stops
+    this.camera.position.set(...sh.from).lerp(_tmp.set(...sh.to), e);
+    const look = _tmp2.set(...sh.lookFrom).lerp(_tmp.set(...sh.lookTo), e);
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(look);
+    if (this.camera.fov !== 55) {
+      this.camera.fov = 55;
+      this.camera.updateProjectionMatrix();
+    }
+    // Dip to black around each cut.
+    const toCut = sh.end - t, fromCut = t - start;
+    const fade = i === shots.length - 1 && t > sh.end - 0.4 ? 0 : Math.max(0, 1 - Math.min(toCut, fromCut) / 0.35);
+    return { fade: i === 0 && fromCut < 0.35 ? Math.max(fade, 1 - fromCut / 0.35) : fade, logo: t > INTRO_GO };
   }
 
   /** Start (or restart) a real race with the given settings. */
@@ -346,7 +420,7 @@ export class Game {
 
   /** The car the camera (and the engine sound) follows. */
   private focusRacer(): Racer {
-    return this.mode === 'menu' ? this.demoFocus : this.player;
+    return this.mode === 'menu' || this.mode === 'intro' ? this.demoFocus : this.player;
   }
 
   private cutDemoCamera(): void {
@@ -371,7 +445,7 @@ export class Game {
 
   private sfx(name: SfxName, pos?: THREE.Vector3, gain = 1): void {
     if (this.mode === 'paused') return;
-    const menuScale = this.mode === 'menu' ? 0.4 : 1;
+    const menuScale = this.mode === 'menu' ? 0.4 : this.mode === 'intro' ? 0.7 : 1;
     if (!pos) {
       this.sound.play(name, { gain: gain * menuScale });
       return;
@@ -386,7 +460,7 @@ export class Game {
     this.scene.add(visual.root);
     const racer: Racer = {
       car, visual, ai: null, progress: null!, input: { throttle: 0, steer: 0, handbrake: true }, stairStep: [-1, -1], rail: 0, item: null, itemRoll: 0, itemHeld: 0,
-      rev: 0, fxSmoke: 0, fxFlame: 0, wasAir: 0, prevSpeed: 0,
+      fallenFor: 0, rev: 0, fxSmoke: 0, fxFlame: 0, wasAir: 0, prevSpeed: 0,
       renderPos: car.pos.clone(), renderQuat: car.quat.clone(),
     };
     this.racers.push(racer);
@@ -467,7 +541,9 @@ export class Game {
       const slide = c.groundedCount >= 2 && c.speed > 3
         ? Math.max(0, Math.abs(c.slipAngle) - 0.18) * 2.2 + (r.input.handbrake && c.speed > 5 ? 0.5 : 0) + (c.stunTime > 0 ? 0.6 : 0)
         : 0;
-      r.fxSmoke = near ? r.fxSmoke + Math.min(1.5, slide) * 40 * q * dt : 0;
+      // Mud flicks up brown instead of smoke.
+      const muddy = c.gripScale < 1 && c.groundedCount > 0 && c.speed > 3;
+      r.fxSmoke = near ? r.fxSmoke + (Math.min(1.5, slide) + (muddy ? 1.2 : 0)) * 40 * q * dt : 0;
       while (r.fxSmoke >= 1) {
         r.fxSmoke -= 1;
         const rear = c.wheels.filter((w) => !w.front && w.grounded);
@@ -477,7 +553,9 @@ export class Game {
         this.smoke.emit({
           pos: _tmp.copy(w.contactPoint).addScaledVector(c.up, 0.03),
           vel: _tmp2.set(v.x * 0.15 + rand(-0.3, 0.3), 0.25 + Math.random() * 0.3, v.z * 0.15 + rand(-0.3, 0.3)),
-          color: _col.setRGB(0.93, 0.93, 0.95), size: 0.12, grow: 0.9, life: rand(0.8, 1.2), alpha: 0.5, drag: 1.5, gravity: -0.15,
+          ...(muddy
+            ? { color: _col.setRGB(0.36, 0.24, 0.12), size: 0.07, grow: 0.3, life: rand(0.4, 0.7), alpha: 0.85, drag: 2, gravity: 6 }
+            : { color: _col.setRGB(0.93, 0.93, 0.95), size: 0.12, grow: 0.9, life: rand(0.8, 1.2), alpha: 0.5, drag: 1.5, gravity: -0.15 }),
         });
       }
       // Boost: a flame from the back.
@@ -584,7 +662,11 @@ export class Game {
   private update(dt: number): void {
     this.input.poll();
     const act = this.input.actions;
-    if (this.mode !== 'race') {
+    if (this.mode === 'intro') {
+      this.introT += dt;
+      const anyKey = this.input.anyPressed || act.accept || act.confirm || act.back || act.pause || act.nav !== null;
+      if (anyKey || this.introT > INTRO_END) this.finishIntro();
+    } else if (this.mode !== 'race') {
       // Gamepad in menus (the keyboard and mouse talk to the menu directly).
       if (act.nav) this.menu.nav(act.nav);
       if (act.accept) this.menu.activate();
@@ -595,13 +677,14 @@ export class Game {
       this.handleActions();
     }
     const allCars = this.racers.map((r) => r.car);
-    const demo = this.mode === 'menu';
+    const demo = this.mode === 'menu' || this.mode === 'intro';
     const aiCtx = (r: Racer) => ({
       gapToPlayer: demo ? 0 : r.progress.progress - this.playerProgress.progress,
       others: allCars,
       racing: this.race.racing,
       pace: this.difficulty.pace,
       band: this.difficulty.band,
+      obstacles: this.trackBuild.obstacles,
     });
     // Past the flag (or in the demo) the player's car drives itself: a lap of honour.
     const selfDrive = demo || this.playerProgress.finished;
@@ -630,6 +713,7 @@ export class Game {
     let steps = 0;
     while (this.accumulator >= FIXED_DT && steps < MAX_STEPS_PER_FRAME) {
       for (const r of this.racers) r.car.step(FIXED_DT, r.input);
+      for (const sw of this.trackBuild.sweepers) sw.step(FIXED_DT);
       this.world.step(this.events);
       this.handleCollisions();
       for (const r of this.racers) r.car.postStep();
@@ -641,12 +725,22 @@ export class Game {
     if (steps > 0) {
       this.trackBuild.cones.sync();
       this.trackBuild.balls.sync();
+      for (const sw of this.trackBuild.sweepers) sw.sync();
     }
     let proj = this.track.project(pc.pos, this.playerTrackIndex);
     if (proj.distance > 6) proj = this.track.project(pc.pos); // lost the thread (teleport, big jump)
     this.playerTrackIndex = proj.index;
     this.updateSetPieces(dt);
     for (const e of this.race.update(dt)) this.onRaceEvent(e);
+    if (this.mode === 'intro') {
+      // Hold the grid until the last shot, then lights out.
+      if (this.introT < INTRO_GO) this.race.clock = Math.min(this.race.clock, -1);
+      else if (this.race.phase === 'countdown') {
+        this.race.skipCountdown();
+        this.sound.play('go', { gain: 0.8 });
+        this.sound.cheer(1.2);
+      }
+    }
     this.updateItems(dt);
 
     this.carEffects(dt);
@@ -802,6 +896,23 @@ export class Game {
       const idx = r === this.player ? this.playerTrackIndex : r.ai!.hint;
       const at = this.track.samples[Math.max(0, idx)];
       this.stairHops(c, at.s, r.stairStep);
+      // Mud: lower grip while on it.
+      const mud = this.trackBuild.muds.find((m) => this.track.forwardDistance(m.s0, at.s) <= this.track.forwardDistance(m.s0, m.s1));
+      c.gripScale = mud && c.groundedCount > 0 ? mud.grip : 1;
+      // Fell off a deck (a missed gap jump, over the edge) and is sitting well below the track:
+      // put it back after a moment.
+      const below = at.pos.y - c.pos.y > 1.2 && !at.loop;
+      r.fallenFor = below ? r.fallenFor + dt : 0;
+      if (r.fallenFor > 1.2) {
+        r.fallenFor = 0;
+        if (r === this.player) {
+          this.resetPlayer();
+          if (this.mode === 'race') this.hud.flash('OOPS!', 'BACK ON TRACK', 1.2);
+        } else {
+          this.respawn(r);
+        }
+        continue;
+      }
       if (stands && this.track.forwardDistance(stands[0], at.s) <= this.track.forwardDistance(stands[0], stands[1])) {
         this.guideAlong(c, at, dt);
         this.deckGovernor(c, at.s, dt);
@@ -1162,7 +1273,10 @@ export class Game {
     // Loop: watch through it from the grass behind the entry (the chase view would be blocked).
     const smp = this.track.samples[Math.max(0, this.trackIndexOf(focus))];
     this.rig.shot = smp.loop && this.loopShot ? this.loopShot : null;
-    if (this.mode !== 'paused') this.rig.update(target, dt);
+    if (this.mode === 'intro') {
+      const { fade, logo } = this.introCamera(this.introT);
+      this.intro.update(INTRO_CAPTIONS, this.introT, fade, logo);
+    } else if (this.mode !== 'paused') this.rig.update(target, dt);
     this.sky.position.copy(this.camera.position);
     this.sun.follow(focus.renderPos);
     const pxPerM = this.renderer.getDrawingBufferSize(_v2).y / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2));

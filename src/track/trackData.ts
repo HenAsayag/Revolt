@@ -58,7 +58,15 @@ export type TrackFeature =
   /** No water barriers between from/to on the given side. */
   | { type: 'barrierGap'; from: XZ; to: XZ; side: 'left' | 'right' | 'both' }
   /** Named stretch (used by the game for per-section behaviour). */
-  | { type: 'zone'; name: string; from: XZ; to: XZ };
+  | { type: 'zone'; name: string; from: XZ; to: XZ }
+  /** A striped arm spinning over the track on a centre post (rad/s; phase in radians). */
+  | { type: 'sweeper'; at: XZ; speed: number; phase?: number }
+  /** A hole in a deck (no floor, no curbs) — jump it. */
+  | { type: 'gap'; from: XZ; to: XZ }
+  /** Slippery mud across the track: grip is multiplied by `grip` while on it. */
+  | { type: 'mud'; from: XZ; to: XZ; grip: number }
+  /** Fixed posts every `spacing` m, alternating ±offset from the centre line. */
+  | { type: 'bollards'; from: XZ; to: XZ; spacing: number; offset: number };
 
 /** East stand geometry (from the model): rows 0.75 m deep, 0.43 m high, row 0 at z 40.13, y 1.15. */
 const stepNose = (z: number) => 1.58 + 0.573 * (z - 40.13);

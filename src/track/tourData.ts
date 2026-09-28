@@ -5,12 +5,14 @@
  * world position). Heights over the stands were surveyed with raycasts against the model's
  * collision mesh: seat treads + aisle handrails stay ≥ 0.4 m under every deck.
  *
- *  1. Grid on a plywood deck high in the SOUTH stand (y 7.9), heading toward the main stand.
+ *  1. Grid on a plywood deck high in the SOUTH stand (y 7.9), heading toward the main stand;
+ *     a bollard slalom right after the line.
  *  2. Right-hander at the end of the stand and a plunge down a ramp over the seats onto the pitch.
- *  3. Across the pitch to the big orange loop on the centre line.
- *  4. Sweep into the north run past the goal — footballs on the line.
+ *  3. Across the pitch past a sweeper arm to the big orange loop on the centre line, then a
+ *     second sweeper.
+ *  4. A muddy sweep into the north run past the goal — footballs on the line.
  *  5. Climbing right-hander up into the EAST stand.
- *  6. The balcony: ~90 m of deck over the East stand crowd, gently weaving.
+ *  6. The balcony: ~90 m of deck over the East stand crowd, gently weaving — with a gap jump.
  *  7. Through the south-east corner over the seats and back onto the South stand deck.
  */
 import type { TrackControlPoint, TrackFeature } from './trackData';
@@ -153,11 +155,19 @@ export const TOUR_FEATURES: TrackFeature[] = [
   // Pitch.
   { type: 'boost', at: [-9, -8.5] },
   { type: 'barrierGap', from: [LOOP_BASE[0] - 1, LOOP_BASE[1]], to: [LOOP_BASE[0] + 3.8, LOOP_BASE[1] + 2.6], side: 'both' },
-  { type: 'slalom', from: [12, -5.9], to: [24, -8.2], spacing: 4, offset: 0.9 },
+  // Hazards (the Tour's hard mode): two sweeper arms on the pitch — time your run past them.
+  { type: 'sweeper', at: [-14, -10.2], speed: 1.25 },
+  { type: 'sweeper', at: [18, -6.4], speed: -1.5, phase: 1.2 },
+  // Mud on the north sweep: the car slides wide unless you lift.
+  { type: 'mud', from: [34.5, -8.9], to: [41.2, 3], grip: 0.3 },
   { type: 'footballs', at: [[41.2, 3.5], [41.4, 8], [41, 12.5]], goal: [52.5, 0] },
   { type: 'barrierGap', from: [41.2, 1], to: [41.2, 15], side: 'left' },
-  // Balcony: a boost halfway along.
+  // Balcony: a boost, then a kicker and a 2.8 m gap in the deck, 7 m above the seats.
   { type: 'boost', at: [2, BAL_Z] },
+  { type: 'kicker', at: [-5.9, BAL_Z - 0.15], height: 0.28, length: 1.2 },
+  { type: 'gap', from: [-7.35, BAL_Z - 0.1], to: [-10.1, BAL_Z + 0.05] },
+  // South stand: a bollard slalom straight after the start line.
+  { type: 'bollards', from: [SOUTH_X, -1.5], to: [SOUTH_X, -10], spacing: 4.2, offset: 0.8 },
 ];
 
 /** Item box rows (world [x, z]): flat, wide places. */

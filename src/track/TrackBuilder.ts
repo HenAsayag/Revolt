@@ -8,6 +8,7 @@ import { FootballField } from './Footballs';
 import { buildBoostPads, buildDeck, buildGlide, buildLoop, buildRamp, buildWalls, type BoostPads } from './TrackPieces';
 import type { Track } from './Track';
 import type { TrackFeature } from './trackData';
+import { buildBollards, buildMud, Sweeper } from './Obstacles';
 
 const BARRIER = { length: 1.15, gap: 0.05, height: 0.55, base: 0.42, top: 0.14, clearance: 0.22 } as const;
 /** Height of the barriers' (invisible) collision fence, m. */
@@ -28,6 +29,11 @@ export interface BuiltTrack {
   zones: Record<string, [number, number]>;
   debugLine: THREE.Line;
   barrierCount: number;
+  sweepers: Sweeper[];
+  /** Mud spans [s0, s1] and the grip multiplier on them. */
+  muds: { s0: number; s1: number; grip: number }[];
+  /** Fixed obstacles on the racing surface (bollards, sweeper posts), for the AI to avoid. */
+  obstacles: THREE.Vector3[];
 }
 
 /** Water-filled road barrier: a ribbed trapezoid, extruded along local Z, base at y = 0. */
@@ -65,6 +71,12 @@ export function buildTrack(scene: THREE.Object3D, world: RAPIER.World, track: Tr
   const bumps: BuiltTrack['bumps'] = [];
   const builder = new LevelBuilder(root, world);
   const ply = new THREE.MeshStandardMaterial({ map: plywoodTexture(), roughness: 0.8 });
+  const sweepers: Sweeper[] = [];
+  const muds: BuiltTrack['muds'] = [];
+  const obstacles: THREE.Vector3[] = [];
+  // Gaps first: decks are built around them.
+  const gapSpans = features.filter((f) => f.type === 'gap').map((f) => [track.sAt(f.from), track.sAt(f.to)] as [number, number]);
+  const inGap = (s: number) => gapSpans.some(([a, b]) => inSpan(track, s, a, b));
 
   const walk = (from: [number, number], to: [number, number], spacing: number, fn: (s: number, k: number) => void) => {
     const s0 = track.sAt(from);
@@ -97,9 +109,43 @@ export function buildTrack(scene: THREE.Object3D, world: RAPIER.World, track: Tr
       case 'ramp':
         buildRamp(root, world, new THREE.Vector3(...f.from), new THREE.Vector3(...f.to), f.width, f.base);
         break;
-      case 'deck':
-        buildDeck(root, world, track.span(track.sAt(f.from), track.sAt(f.to)));
+      case 'deck': {
+        // Split around any gaps: each solid run becomes its own deck (curbs taper at the gap edges).
+        let run: ReturnType<Track['span']> = [];
+        for (const smp of [...track.span(track.sAt(f.from), track.sAt(f.to)), null]) {
+          if (smp && !inGap(smp.s)) {
+            run.push(smp);
+            continue;
+          }
+          if (run.length > 2) buildDeck(root, world, run);
+          run = [];
+        }
         break;
+      }
+      case 'gap':
+        break;
+      case 'sweeper': {
+        const smp = track.sampleAt(track.sAt(f.at));
+        sweepers.push(new Sweeper(root, world, smp, f.speed, f.phase ?? 0));
+        obstacles.push(smp.pos.clone());
+        break;
+      }
+      case 'mud': {
+        const s0 = track.sAt(f.from), s1 = track.sAt(f.to);
+        muds.push({ s0, s1, grip: f.grip });
+        buildMud(root, track.span(s0, s1));
+        break;
+      }
+      case 'bollards': {
+        const spots: ReturnType<Track['sampleAt']>[] = [];
+        const lat: number[] = [];
+        walk(f.from, f.to, f.spacing, (s, k) => {
+          spots.push(track.sampleAt(s));
+          lat.push((k % 2 ? -1 : 1) * f.offset);
+        });
+        obstacles.push(...buildBollards(root, world, spots, lat));
+        break;
+      }
       case 'glide':
         buildGlide(world, new THREE.Vector3(...f.from), new THREE.Vector3(...f.to), f.width);
         break;
@@ -211,7 +257,7 @@ export function buildTrack(scene: THREE.Object3D, world: RAPIER.World, track: Tr
   debugLine.visible = false;
   root.add(debugLine);
 
-  return { cones, balls, pads, bumps, loopSpan, startS, zones, debugLine, barrierCount: mats.length };
+  return { cones, balls, pads, bumps, loopSpan, startS, zones, debugLine, barrierCount: mats.length, sweepers, muds, obstacles };
 }
 
 /** Chequered line across the track, painted grid boxes behind it, and a gantry overhead. */

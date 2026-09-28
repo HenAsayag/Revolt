@@ -6,9 +6,11 @@ Toy RC-car racing inside Bloomfield Stadium (Tel Aviv). Vite + TypeScript + thre
 You against 7 AI rivals over 1, 3 or 5 laps on two tracks:
 
 - **Stadium Tour** (default, 4.4 m wide on the grass): the grid sits on a plywood deck high in the
-  South stand; plunge down over the seats onto the pitch, loop the loop, run past the north goal,
-  climb a curving ramp into the East stand, race a 90 m balcony over the crowd, swing through the
-  corner over the seats and back onto the South stand.
+  South stand, with a bollard slalom straight after the line; plunge down over the seats onto the
+  pitch, dodge two spinning sweeper arms either side of the loop, slide through the mud on the
+  north sweep, run past the goal, climb a curving ramp into the East stand, race a 90 m balcony over
+  the crowd — and clear its gap jump, 7 m above the seats — then swing through the corner over the
+  seats and back onto the South stand.
 - **Pitch Circuit** (the original): kicker, footballs, a ramp over the East stand, stair hops down an
   aisle, a ski jump and the loop.
 
@@ -26,7 +28,13 @@ npm run dev        # http://localhost:5180
 
 Other scripts: `npm run typecheck`, `npm run build`, `npm run sim` (headless handling numbers:
 acceleration, turning radius, drift, jumps, wall slides, ramps), `npm run deploy:pages` (build → `gh-pages` branch).
-URL options: `?touch=1` / `?touch=0` force the on-screen controls, `?quality=low|high`,
+The game opens on a start screen (tap to start — this also unlocks audio; **Play fullscreen** where
+the browser allows it) and a short fly-through of the stadium (any key / tap skips it).
+**iPhone:** Safari can't make a web page fullscreen; use *Share → Add to Home Screen* and launch it
+from the icon for a real fullscreen, landscape game (web-app manifest + icons in `public/`,
+regenerate the icons with `node tools/make-icons.mjs`).
+
+URL options: `?skip=1` (straight to the menu), `?touch=1` / `?touch=0` force the on-screen controls, `?quality=low|high`,
 `?track=tour|classic`.
 
 **Steering: Assisted** (default) follows the curve when you're not steering and eases you off the
@@ -122,6 +130,8 @@ src/
   audio/Sound.ts          Web Audio synthesis: engines, tyres, crowd, effects, music
   render/Particles.ts     pooled point-sprite particles (smoke, flames, sparks, confetti)
   ui/Menu.ts              title screen + pause menu, saved settings
+  ui/Intro.ts             start gate (fullscreen / iPhone home-screen tip) + intro captions
+  track/Obstacles.ts      sweeper arms (kinematic), mud, bollards
   dev/devTools.ts         window.__test (dev only): pilot + headless lap runner
   physics/groups.ts       collision groups (wheel rays skip cones; cars detect cones by sensor)
   ui/Hud.ts               DOM HUD

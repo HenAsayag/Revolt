@@ -30,6 +30,8 @@ export interface AIContext {
   /** Difficulty: top-speed multiplier and rubber-band strength multiplier (1 = normal). */
   pace?: number;
   band?: number;
+  /** Fixed obstacles on the track (bollards, sweeper posts) to steer around. */
+  obstacles?: THREE.Vector3[];
 }
 
 const _to = new THREE.Vector3();
@@ -138,6 +140,12 @@ export class AIDriver {
       const ahead = _to.dot(car.fwd);
       const side = _to.dot(car.left);
       if (ahead > 0.2 && ahead < 2.8 && Math.abs(side) < 0.45) this.dodge = side > 0 ? -0.8 : 0.8;
+    }
+    for (const o of ctx.obstacles ?? []) {
+      _to.subVectors(o, car.pos);
+      const ahead = _to.dot(car.fwd);
+      const side = _to.dot(car.left);
+      if (ahead > 0.3 && ahead < 3.5 + car.speed * 0.15 && Math.abs(side) < 0.6) this.dodge = side > 0 ? -0.9 : 0.9;
     }
     this.dodge *= Math.exp(-dt * 1.5);
     lane = THREE.MathUtils.clamp(lane + this.dodge, -1, 1) * (1 - this.centreWeight(pr.s + car.speed * 0.3));

@@ -146,7 +146,14 @@ export function installDevTools(game: Game): void {
       let p = track.project(c.pos, hint);
       if (p.distance > 6) p = track.project(c.pos);
       hint = p.index;
-      const target = track.pointAt(p.s + (opts.look ?? 2.5) + c.speed * 0.15, 0).sub(c.pos);
+      // Like a person would: swing wide of a post or bollard on the line ahead.
+      let aim = 0;
+      for (const o of game.trackBuild.obstacles) {
+        const po = track.project(o, p.index);
+        const ahead = track.forwardDistance(p.s, po.s);
+        if (ahead > 0 && ahead < 6 && Math.abs(po.lateral) < 0.9) aim = po.lateral > 0 ? po.lateral - 1.1 : po.lateral + 1.1;
+      }
+      const target = track.pointAt(p.s + (opts.look ?? 2.5) + c.speed * 0.15, aim).sub(c.pos);
       const ang = Math.atan2(target.dot(c.left), target.dot(c.fwd));
       // lazy: only reacts to big heading errors (a casual player leaving the small stuff to the assist).
       queue.push({ t, steer: Math.abs(ang) > (opts.lazy ? 0.22 : 0.06) ? -Math.sign(ang) : 0 });

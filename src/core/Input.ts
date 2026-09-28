@@ -42,6 +42,9 @@ export class Input {
   readonly actions: ActionInput = { reset: false, camera: false, usePickup: false, pause: false, debug: false, confirm: false, nav: null, accept: false, back: false };
   /** True when the gamepad produced input most recently (for UI hints later). */
   usingGamepad = false;
+  /** Any key, tap/click or gamepad button this frame (e.g. to skip the intro). */
+  anyPressed = false;
+  private tapped = false;
 
   private down = new Set<string>();
   private pressed = new Set<string>();
@@ -59,6 +62,7 @@ export class Input {
     });
     target.addEventListener('keyup', (e) => this.down.delete(e.code));
     target.addEventListener('blur', () => this.down.clear());
+    target.addEventListener('pointerdown', () => (this.tapped = true));
   }
 
   poll(): void {
@@ -79,8 +83,11 @@ export class Input {
 
     a.nav = null;
     a.accept = a.back = false;
+    this.anyPressed = this.pressed.size > 0 || this.tapped;
+    this.tapped = false;
     const pad = firstGamepad();
     if (pad) {
+      if (pad.buttons.some((b, i) => b.pressed && !this.padPrev[i])) this.anyPressed = true;
       const btn = (i: number) => pad.buttons[i]?.pressed ?? false;
       const val = (i: number) => pad.buttons[i]?.value ?? 0;
       const edge = (i: number) => btn(i) && !this.padPrev[i];
