@@ -36,7 +36,7 @@ export class Track {
   readonly step: number;
   readonly samples: TrackSample[] = [];
 
-  constructor(readonly points: TrackControlPoint[], targetStep = 0.5) {
+  constructor(readonly points: TrackControlPoint[], targetStep = 0.5, readonly defaultWidth = DEFAULT_WIDTH) {
     this.curve = new THREE.CatmullRomCurve3(
       points.map((p) => new THREE.Vector3(p.x, p.y ?? 0, p.z)),
       true,
@@ -55,7 +55,7 @@ export class Track {
       const up = new THREE.Vector3().crossVectors(right, tangent).normalize();
       const ci = Math.floor(t * points.length) % points.length;
       const loop = !!points[ci].loop && !!points[(ci + 1) % points.length].loop;
-      const smp = { s: u * this.length, pos, tangent, right, up, width: this.lerpAtT(t, 'width', DEFAULT_WIDTH), loop };
+      const smp = { s: u * this.length, pos, tangent, right, up, width: this.lerpAtT(t, 'width', defaultWidth), loop };
       const bank = this.lerpAtT(t, 'bank', 0);
       if (bank !== 0) {
         smp.up.applyAxisAngle(tangent, bank);

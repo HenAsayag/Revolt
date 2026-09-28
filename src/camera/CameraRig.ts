@@ -44,11 +44,11 @@ export class CameraRig {
   mode: CameraMode = 'chase';
 
   // Chase tuning — metres, for a ~0.5 m car.
-  distance = 1.45;
+  distance = 1.7;
   /** Extra pull-back at top speed. */
   speedDistance = 0.3;
-  height = 0.55;
-  lookAhead = 1.3;
+  height = 0.68;
+  lookAhead = 1.6;
   lookHeight = 0.1;
   /** SmoothDamp times: the offset from the car (not world position, so no speed-dependent lag). */
   offsetLag = 0.08;

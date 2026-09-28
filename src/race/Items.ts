@@ -58,7 +58,8 @@ export class PickupBoxes {
     for (const s of rows) {
       const smp = track.sampleAt(s);
       const room = smp.width / 2 - 0.4;
-      for (const lat of [-1, 0, 1]) {
+      // Wide track: four boxes across, else three.
+      for (const lat of smp.width > 3.6 ? [-1, -1 / 3, 1 / 3, 1] : [-1, 0, 1]) {
         const pos = track.pointAt(s, lat * room).addScaledVector(smp.up, 0.3);
         const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(pos.x, pos.y, pos.z));
         const col = world.createCollider(

@@ -14,13 +14,14 @@ import { buildStadium, type Stadium } from '../world/stadium/Stadium';
 import type { StadiumAssets } from '../world/stadium/StadiumModel';
 import { Track } from '../track/Track';
 import { buildTrack, type BuiltTrack } from '../track/TrackBuilder';
-import { CONTROL_POINTS, FEATURES } from '../track/trackData';
+import { TRACKS, type TrackDef, type TrackId } from '../track/tracks';
+import { setGroundProbe } from '../track/TrackPieces';
 import { formatTime, ordinal, RaceManager, type RaceEvent, type RacerProgress } from '../race/RaceManager';
 import { AI_ROSTER, AIDriver } from '../race/AIDriver';
 import { aiWantsToUse, ITEM_NAMES, ItemWorld, PickupBoxes, rollItem, type ItemHit, type ItemKind } from '../race/Items';
 import { Sound, type SfxName } from '../audio/Sound';
 import { Particles } from '../render/Particles';
-import { Menu, type Difficulty, type Settings } from '../ui/Menu';
+import { loadSettings, Menu, type Difficulty, type Settings } from '../ui/Menu';
 
 const MPH = 2.23694;
 /** Rival pace and rubber-band strength per difficulty. */
@@ -43,18 +44,21 @@ const LOOP_PUSH = 14;
 /** Stand-deck speed cap: lateral acceleration it allows (m/s²) and the braking it may use (m/s²). */
 const DECK_GRIP = 11;
 const DECK_BRAKE = 12;
+/** Extra acceleration toward raised plywood surfaces (m/s²). */
+const DECK_STICK = 4;
 /** Loop "rails": lateral pull gains (1/s², 1/s) and cap (m/s²). */
 const RAIL_K = 30;
 const RAIL_D = 8;
 const RAIL_MAX = 16;
+/** Smart-steering strength with hands off (0..1). */
+const ASSIST = 0.55;
 const _tmp = new THREE.Vector3();
 const _tmp2 = new THREE.Vector3();
 const _v2 = new THREE.Vector2();
 const _col = new THREE.Color();
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 const v3 = (t: { x: number; y: number; z: number }) => new THREE.Vector3(t.x, t.y, t.z);
-/** Item box rows (track s), roulette spin before an item can be used, stunt points per item hit. */
-const PICKUP_ROWS = [52, 130, 212, 265];
+/** Roulette spin before an item can be used, stunt points per item hit. */
 const ITEM_ROLL_SECONDS = 0.9;
 const ITEM_HIT_SCORE = 150;
 const BOOST_PAD_SECONDS = 1.1;
@@ -106,6 +110,7 @@ export class Game {
   readonly stadium: Stadium;
   readonly track: Track;
   readonly trackBuild: BuiltTrack;
+  readonly trackDef: TrackDef;
   /** Last known nearest track sample for the player (search hint + respawn point). */
   private playerTrackIndex = -1;
   readonly race: RaceManager;
@@ -137,6 +142,8 @@ export class Game {
   /** 'menu' = title screen over an AI demo race; 'paused' freezes the race under the pause menu. */
   mode: 'menu' | 'race' | 'paused' = 'menu';
   private difficulty = DIFFICULTY.normal;
+  /** Smart steering for the player (menu: Steering → Assisted). */
+  assistOn = true;
   /** Drives the player's car in the demo race; the camera cuts between cars. */
   private readonly demoDriver: AIDriver;
   private demoFocus!: Racer;
@@ -172,8 +179,17 @@ export class Game {
 
     this.world = createWorld();
     this.stadium = buildStadium(this.scene, this.world, assets);
-    this.track = new Track(CONTROL_POINTS);
-    this.trackBuild = buildTrack(this.scene, this.world, this.track, FEATURES);
+    // Which lap: the saved menu choice (or ?track=tour|classic).
+    const urlTrack = new URLSearchParams(location.search).get('track') as TrackId | null;
+    this.trackDef = TRACKS[urlTrack && urlTrack in TRACKS ? urlTrack : loadSettings().track];
+    // Deck posts stand on whatever is below them (seat treads, the pitch): ask the stadium colliders.
+    this.world.step();
+    setGroundProbe((x, y, z) => {
+      const hit = this.world.castRay({ origin: { x, y, z }, dir: { x: 0, y: -1, z: 0 } } as RAPIER.Ray, 40, true, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
+      return hit ? y - hit.timeOfImpact : 0;
+    });
+    this.track = new Track(this.trackDef.points, 0.5, this.trackDef.width);
+    this.trackBuild = buildTrack(this.scene, this.world, this.track, this.trackDef.features);
     if (this.trackBuild.loopSpan) {
       // Side-on to the loop, so the whole ring (and the car going round it) is in view.
       const [s0, s1] = this.trackBuild.loopSpan;
@@ -212,7 +228,7 @@ export class Game {
     this.playerProgress = this.player.progress;
     this.buildCheckpointMarkers();
     // Item boxes: rows across the flat, wide stretches (clear of jumps, cones, the loop and the stands).
-    this.pickups = new PickupBoxes(this.scene, this.world, this.track, PICKUP_ROWS);
+    this.pickups = new PickupBoxes(this.scene, this.world, this.track, this.trackDef.pickups.map((p) => (typeof p === 'number' ? p : this.track.sAt(p))));
     this.items = new ItemWorld(this.scene, this.world, this.racers);
     const sightRay = new RAPIER.Ray({ x: 0, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
     this.rig = new CameraRig(this.camera, (from, to) => {
@@ -292,6 +308,7 @@ export class Game {
     this.menu.hide();
     this.race.laps = st.laps;
     this.difficulty = DIFFICULTY[st.difficulty];
+    this.assistOn = st.assist;
     this.pickups.setEnabled(st.items);
     this.rig.distance = this.chase.distance;
     this.rig.height = this.chase.height;
@@ -590,6 +607,7 @@ export class Game {
         // Finished AI cruise on at an easy pace.
         if (r.progress.finished) d = { throttle: Math.min(d.throttle, 0.35), steer: d.steer, handbrake: false };
       }
+      if (r === this.player && this.assistOn && !selfDrive) d = { ...d, steer: this.assistSteer(r, d) };
       // Grid hold during the countdown: steer all you like, but the handbrake is on.
       r.input = countdown ? { throttle: 0, steer: d.steer, handbrake: true } : { ...d, steer: this.railSteer(r, d.steer) };
     }
@@ -783,7 +801,10 @@ export class Game {
         this.guideAlong(c, at, dt);
       }
       // Inside the loop: press the car onto the surface (only while it's actually on it).
-      c.surfaceStick = at.loop && c.groundedCount >= 2 ? LOOP_STICK : at.loop ? 2 : 0;
+      // Raised plywood (decks, ramps): a little extra press-down so crests don't launch you off the edge.
+      c.surfaceStick = at.loop
+        ? c.groundedCount >= 2 ? LOOP_STICK : 2
+        : at.pos.y > 0.3 && c.groundedCount >= 2 ? DECK_STICK : 0;
       // Holding the gas always carries you round the loop (a speed floor while on the ring).
       if (at.loop && c.groundedCount >= 2 && r.input.throttle > 0 && c.forwardSpeed < LOOP_MIN_SPEED) {
         const j = c.cfg.mass * LOOP_PUSH * dt;
@@ -820,6 +841,33 @@ export class Game {
       this.sfx('boost', undefined, 0.6);
       this.addScore(Math.round(pc.lastDriftBoost * 60));
     }
+  }
+
+  /**
+   * Smart steering: with no input the car follows the curve on its current line; near the edge
+   * it's eased back toward the middle; the harder you steer, the less it interferes. Off while
+   * handbrake-drifting, reversing, or airborne.
+   */
+  private assistSteer(r: Racer, input: DriveInput): number {
+    const car = r.car;
+    const steer = input.steer;
+    const idx = this.playerTrackIndex;
+    if (idx < 0 || input.handbrake || car.groundedCount < 2 || car.forwardSpeed < 2 || input.throttle < 0) return steer;
+    const smp = this.track.samples[idx];
+    if (smp.loop) return steer;
+    const lat = _tmp.subVectors(car.pos, smp.pos).dot(smp.right);
+    const room = Math.max(0.3, smp.width / 2 - 0.3);
+    // How deep into the last 0.8 m before the edge (0 = clear, 1 = at the edge).
+    const edge = THREE.MathUtils.clamp((Math.abs(lat) - (room - 0.8)) / 0.8, 0, 1);
+    const aimLat = lat * (1 - 0.7 * edge);
+    const target = this.track.pointAt(smp.s + 1.5 + car.speed * 0.22, aimLat).sub(car.pos);
+    const ang = Math.atan2(target.dot(car.left), target.dot(car.fwd));
+    const auto = THREE.MathUtils.clamp(-ang * 2, -1, 1);
+    // Heading for the edge right now? Then the guard gets a bigger say.
+    const v = car.body.linvel();
+    const outward = Math.sign(lat) * (v.x * smp.right.x + v.y * smp.right.y + v.z * smp.right.z) > 0.3 ? 1 : 0;
+    const w = Math.min(0.9, ASSIST * (1 - 0.7 * Math.abs(steer)) + 0.5 * edge * outward);
+    return THREE.MathUtils.clamp(steer + (auto - steer) * w, -1, 1);
   }
 
   /**

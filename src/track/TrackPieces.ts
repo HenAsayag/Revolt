@@ -7,8 +7,15 @@ import { GLIDE_GROUPS, PAD_GROUPS } from '../physics/groups';
 import { boostPadTexture, plywoodTexture } from '../render/textures';
 import type { TrackSample } from './Track';
 
-/** Height of whatever a support post would stand on: the East stand's treads, else the ground. */
-export function supportHeight(x: number, z: number): number {
+/** Finds the surface under a point (the game installs a raycast against the stadium). */
+let groundProbe: ((x: number, y: number, z: number) => number) | null = null;
+export function setGroundProbe(fn: (x: number, y: number, z: number) => number): void {
+  groundProbe = fn;
+}
+
+/** Height of whatever a support post at (x, z) hanging from height y would stand on. */
+export function supportHeight(x: number, z: number, y = 30): number {
+  if (groundProbe) return groundProbe(x, y, z);
   if (z >= 40.13 && z < 53.75 && Math.abs(x) < 50) return 1.15 + 0.43 * Math.floor((z - 40.13) / 0.75);
   return 0;
 }
@@ -104,7 +111,8 @@ export function addRibbonColliders(world: RAPIER.World, samples: TrackSample[], 
           for (const up of [-0.05, h]) pts.push(smp.pos.clone().addScaledVector(smp.right, side * lat).addScaledVector(smp.up, up));
         }
       }
-      addStaticHull(world, pts, new THREE.Vector3(), undefined, { friction: 0.3, restitution: 0.2 });
+      // Slippery, like the water barriers: a car that touches the curb slides along it instead of stopping dead.
+      addStaticHull(world, pts, new THREE.Vector3(), undefined, { friction: 0.02, restitution: 0.05 });
     }
   }
 }
@@ -136,7 +144,7 @@ export function buildDeck(root: THREE.Object3D, world: RAPIER.World, samples: Tr
     const smp = samples[i];
     for (const side of [-1, 1]) {
       const top = smp.pos.clone().addScaledVector(smp.right, side * (smp.width / 2 + 0.03)).addScaledVector(smp.up, -0.1);
-      const foot = supportHeight(top.x, top.z);
+      const foot = supportHeight(top.x, top.z, top.y - 0.05);
       if (top.y - foot < 0.25) continue;
       beams.push(beamGeometry(top, new THREE.Vector3(top.x, foot, top.z), 0.08));
     }

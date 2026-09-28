@@ -3,8 +3,16 @@
 Toy RC-car racing inside Bloomfield Stadium (Tel Aviv). Vite + TypeScript + three.js + Rapier.
 **Play it:** https://henasayag.github.io/Revolt/ (desktop, gamepad or phone — turn it sideways).
 
-You against 7 AI rivals over 1, 3 or 5 laps: the pitch, a plywood ramp over the stands, stair hops,
-a ski jump, a loop, pickups (lightning boost, bouncy bomb, oil slick, electric pulse) and stunt
+You against 7 AI rivals over 1, 3 or 5 laps on two tracks:
+
+- **Stadium Tour** (default, 4.4 m wide on the grass): the grid sits on a plywood deck high in the
+  South stand; plunge down over the seats onto the pitch, loop the loop, run past the north goal,
+  climb a curving ramp into the East stand, race a 90 m balcony over the crowd, swing through the
+  corner over the seats and back onto the South stand.
+- **Pitch Circuit** (the original): kicker, footballs, a ramp over the East stand, stair hops down an
+  aisle, a ski jump and the loop.
+
+Plus pickups (lightning boost, bouncy bomb, oil slick, electric pulse) and stunt
 points. All sound — engines, crowd, effects and the chiptune loop — is synthesised in the browser.
 The stadium is the Bloomfield 2019 Blender model (converted to `public/models/`); cars, track
 pieces and textures are procedural.
@@ -18,7 +26,11 @@ npm run dev        # http://localhost:5180
 
 Other scripts: `npm run typecheck`, `npm run build`, `npm run sim` (headless handling tests),
 `npx tsx scripts/control.ts` (controllability), `npm run deploy:pages` (build → `gh-pages` branch).
-URL options: `?touch=1` / `?touch=0` force the on-screen controls, `?quality=low|high`.
+URL options: `?touch=1` / `?touch=0` force the on-screen controls, `?quality=low|high`,
+`?track=tour|classic`.
+
+**Steering: Assisted** (default) follows the curve when you're not steering and eases you off the
+walls; **Pro** is raw.
 
 ## Controls
 
@@ -87,7 +99,9 @@ src/
     TvFeed.ts             broadcast camera → the model's LED screens
     Skyline.ts            Tel Aviv–style towers + low-rise city
   track/
-    trackData.ts          ← EDIT THE TRACK HERE: spline control points + features by world position
+    trackData.ts          ← the Pitch Circuit: spline control points + features by world position
+    tourData.ts           ← the Stadium Tour (heights over the stands surveyed from the collision mesh)
+    tracks.ts             track registry (menu choice)
     Track.ts              sampled closed spline: frames, width, projection, grid slots
     TrackBuilder.ts       water barriers, kickers, start line/gantry/grid, features → pieces
     TrackPieces.ts        plywood decks, the loop + A-frames, ramps, glide slabs, walls, boost pads

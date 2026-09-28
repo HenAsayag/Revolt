@@ -8,7 +8,7 @@ import type { RaycastCar } from '../vehicle/RaycastCar';
  * Dev-only helpers on `window.__test` (headless lap checks from the console / automation).
  * The pilot is a simple pure-pursuit driver along the spline — a stand-in until the phase-6 AI.
  */
-const TEST = { laps: 3, difficulty: 'normal' as const, items: true, music: 0, sfx: 0 };
+const TEST = { track: 'tour' as const, laps: 3, assist: false, difficulty: 'normal' as const, items: true, music: 0, sfx: 0 };
 
 export function installDevTools(game: Game): void {
   const track = game.track;
@@ -129,11 +129,11 @@ export function installDevTools(game: Game): void {
    * reaction delay, never brakes, presses R when stuck or on its roof. Solo (AI parked off-world).
    * Measures how forgiving the controls are: wall hits, resets, landing attitude, lap times.
    */
-  const naive = (laps = 2, maxSeconds = 120, opts: { delay?: number; look?: number; lift?: boolean } = {}) => {
+  const naive = (laps = 2, maxSeconds = 120, opts: { delay?: number; look?: number; lift?: boolean; assist?: boolean; lazy?: boolean } = {}) => {
     const delay = opts.delay ?? 0.15;
     const car = game.player.car;
     game.stop();
-    game.beginRace(TEST);
+    game.beginRace({ ...TEST, assist: !!opts.assist });
     for (const r of game.racers) if (r.ai) r.car.body.setEnabled(false);
     game.simulate(3.05);
     hint = -1;
@@ -148,7 +148,8 @@ export function installDevTools(game: Game): void {
       hint = p.index;
       const target = track.pointAt(p.s + (opts.look ?? 2.5) + c.speed * 0.15, 0).sub(c.pos);
       const ang = Math.atan2(target.dot(c.left), target.dot(c.fwd));
-      queue.push({ t, steer: Math.abs(ang) > 0.06 ? -Math.sign(ang) : 0 });
+      // lazy: only reacts to big heading errors (a casual player leaving the small stuff to the assist).
+      queue.push({ t, steer: Math.abs(ang) > (opts.lazy ? 0.22 : 0.06) ? -Math.sign(ang) : 0 });
       while (queue.length > 1 && queue[1].t <= t - delay) queue.shift();
       // lift: a slightly smarter human who lets off the gas while steering hard at speed.
       const steer = queue[0].steer;

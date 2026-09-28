@@ -1,7 +1,10 @@
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
 export interface Settings {
+  track: 'tour' | 'classic';
   laps: number;
+  /** Smart steering: helps follow the track and keeps you off the walls. */
+  assist: boolean;
   difficulty: Difficulty;
   items: boolean;
   /** 0..1 */
@@ -10,7 +13,7 @@ export interface Settings {
 }
 
 const KEY = 'bloomfield-rc-settings';
-const DEFAULTS: Settings = { laps: 3, difficulty: 'normal', items: true, music: 0.5, sfx: 0.9 };
+const DEFAULTS: Settings = { track: 'tour', laps: 3, assist: true, difficulty: 'normal', items: true, music: 0.5, sfx: 0.9 };
 
 export function loadSettings(): Settings {
   try {
@@ -19,6 +22,7 @@ export function loadSettings(): Settings {
       const s = { ...DEFAULTS, ...JSON.parse(raw) } as Settings;
       if (![1, 3, 5].includes(s.laps)) s.laps = 3;
       if (!['easy', 'normal', 'hard'].includes(s.difficulty)) s.difficulty = 'normal';
+      if (s.track !== 'tour' && s.track !== 'classic') s.track = 'tour';
       return s;
     }
   } catch {
@@ -67,7 +71,9 @@ export class Menu {
         <div class="menu-tag">Toy-car racing around the stadium</div>
         <button class="menu-btn primary" data-act="start" data-row>RACE!</button>
         <div class="menu-opts">
+          ${seg('Track', 'track', [['tour', 'Stadium Tour'], ['classic', 'Pitch Circuit']])}
           ${seg('Laps', 'laps', [['1', '1'], ['3', '3'], ['5', '5']])}
+          ${seg('Steering', 'assist', [['on', 'Assisted'], ['off', 'Pro']])}
           ${seg('Rivals', 'difficulty', [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Hard']])}
           ${seg('Pickups', 'items', [['on', 'On'], ['off', 'Off']])}
           ${slider('Music', 'music')}
@@ -184,6 +190,8 @@ export class Menu {
 
   private current(opt: string): string {
     const s = this.settings;
+    if (opt === 'track') return s.track;
+    if (opt === 'assist') return s.assist ? 'on' : 'off';
     return opt === 'laps' ? String(s.laps) : opt === 'difficulty' ? s.difficulty : s.items ? 'on' : 'off';
   }
 
@@ -191,6 +199,16 @@ export class Menu {
     if (opt === 'laps') this.settings.laps = Number(v);
     else if (opt === 'difficulty') this.settings.difficulty = v as Difficulty;
     else if (opt === 'items') this.settings.items = v === 'on';
+    else if (opt === 'assist') this.settings.assist = v === 'on';
+    else if (opt === 'track') {
+      if (this.settings.track === v) return;
+      this.settings.track = v as Settings['track'];
+      this.sync();
+      // A different track means a different world: rebuild by reloading (keeps it simple and leak-free).
+      this.root.querySelector('.menu-tag')!.textContent = 'Loading track…';
+      setTimeout(() => location.reload(), 60);
+      return;
+    }
     this.h.click();
     this.sync();
     this.h.changed(this.settings);
