@@ -65,6 +65,10 @@ const LOOP_PUSH = 14;
 /** Stand-deck speed cap: lateral acceleration it allows (m/s²) and the braking it may use (m/s²). */
 const DECK_GRIP = 11;
 const DECK_BRAKE = 12;
+/** Top speed down a staircase, m/s. */
+const STAIRS_MAX_SPEED = 9.5;
+/** How hard the stairs hold that limit (m/s²; must beat gravity + full throttle on 30°). */
+const STAIRS_BRAKE = 40;
 /** Extra acceleration toward raised plywood surfaces (m/s²). */
 const DECK_STICK = 4;
 /** Loop "rails": lateral pull gains (1/s², 1/s) and cap (m/s²). */
@@ -212,6 +216,7 @@ export class Game {
       const hit = this.world.castRay({ origin: { x, y, z }, dir: { x: 0, y: -1, z: 0 } } as RAPIER.Ray, 40, true, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC);
       return hit ? y - hit.timeOfImpact : 0;
     });
+    if (this.trackDef.clearSeats) this.stadium.clearSeats(this.trackDef.clearSeats);
     this.track = new Track(this.trackDef.points, 0.5, this.trackDef.width);
     this.trackBuild = buildTrack(this.scene, this.world, this.track, this.trackDef.features);
     if (this.trackBuild.loopSpan) {
@@ -352,9 +357,20 @@ export class Game {
     this.sound.setMusicMode('menu');
   }
 
+  /** The intro's shots, with the last one aimed at this track's grid (behind and above the cars). */
+  private introShots(): typeof INTRO_SHOTS {
+    const s0 = this.trackBuild.startS;
+    const at = (d: number, lift: number) => {
+      const smp = this.track.sampleAt(s0 + d);
+      return smp.pos.clone().addScaledVector(smp.up, lift).toArray() as V3;
+    };
+    const last = INTRO_SHOTS[INTRO_SHOTS.length - 1];
+    return [...INTRO_SHOTS.slice(0, -1), { end: last.end, from: at(-12, 1.6), to: at(-7.5, 0.75), lookFrom: at(-1.5, 0), lookTo: at(1, 0) }];
+  }
+
   /** Intro timeline: camera shot at time t (fly between from→to with easing), captions, cut fades. */
   private introCamera(t: number): { fade: number; logo: boolean } {
-    const shots = INTRO_SHOTS;
+    const shots = this.introShots();
     let i = shots.findIndex((sh) => t < sh.end);
     if (i < 0) i = shots.length - 1;
     const sh = shots[i];
@@ -913,9 +929,19 @@ export class Game {
         }
         continue;
       }
-      if (stands && this.track.forwardDistance(stands[0], at.s) <= this.track.forwardDistance(stands[0], stands[1])) {
+      const inZone = (z?: [number, number]) => !!z && this.track.forwardDistance(z[0], at.s) <= this.track.forwardDistance(z[0], z[1]);
+      // Raised narrow sections: line the car up with the deck and cap the speed to what the bends allow.
+      if (inZone(stands) || inZone(this.trackBuild.zones.landing)) {
         this.guideAlong(c, at, dt);
         this.deckGovernor(c, at.s, dt);
+      }
+      // Stairs: a speed limit (gravity would run you down them far too fast), plus the guide rail.
+      if (inZone(this.trackBuild.zones.stairs)) {
+        this.guideAlong(c, at, dt);
+        if (c.forwardSpeed > STAIRS_MAX_SPEED) { // also mid-hop
+          const j = -c.cfg.mass * Math.min(STAIRS_BRAKE, (c.forwardSpeed - STAIRS_MAX_SPEED) / dt) * dt;
+          c.body.applyImpulse({ x: c.fwd.x * j, y: c.fwd.y * j, z: c.fwd.z * j }, true);
+        }
       }
       // Loop run-in and ring: a slot-car pull onto the centre line (see railSteer).
       if (r.rail >= 0.7) {

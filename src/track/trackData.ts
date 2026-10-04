@@ -66,7 +66,12 @@ export type TrackFeature =
   /** Slippery mud across the track: grip is multiplied by `grip` while on it. */
   | { type: 'mud'; from: XZ; to: XZ; grip: number }
   /** Fixed posts every `spacing` m, alternating ±offset from the centre line. */
-  | { type: 'bollards'; from: XZ; to: XZ; spacing: number; offset: number };
+  | { type: 'bollards'; from: XZ; to: XZ; spacing: number; offset: number }
+  /**
+   * A concrete staircase between two points on its nose line (steps, rails, skirts) with the physics
+   * to drive it: a glide slab, side walls and a hop every `hopPitch` metres.
+   */
+  | { type: 'stairway'; from: XYZ; to: XYZ; width: number; steps: number; hopPitch: number; hopStrength: number };
 
 /** East stand geometry (from the model): rows 0.75 m deep, 0.43 m high, row 0 at z 40.13, y 1.15. */
 const stepNose = (z: number) => 1.58 + 0.573 * (z - 40.13);

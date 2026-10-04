@@ -6,12 +6,14 @@ import { buildBoards } from './Boards';
 import { FLOOR } from './layout';
 import { buildPitch } from './Pitch';
 import { buildSkyline } from './Skyline';
-import { installStadiumModel, type StadiumAssets } from './StadiumModel';
+import { clearSeats, installStadiumModel, type StadiumAssets } from './StadiumModel';
 import { TvFeed } from './TvFeed';
 
 export interface Stadium {
   tv: TvFeed;
   seatCount: number;
+  /** Remove the seats under track pieces built into the stands ([x0, z0, x1, z1] rectangles). */
+  clearSeats(rects: [number, number, number, number][]): number;
 }
 
 /** Bloomfield Stadium: the imported model, plus the game's own pitch, boards, skyline and TV feed. */
@@ -41,5 +43,5 @@ export function buildStadium(scene: THREE.Scene, world: RAPIER.World, assets: St
   tv.screens = model.screens;
 
   buildSkyline(root);
-  return { tv, seatCount: model.seatCount };
+  return { tv, seatCount: model.seatCount, clearSeats: (rects) => clearSeats(model.seats, rects) };
 }

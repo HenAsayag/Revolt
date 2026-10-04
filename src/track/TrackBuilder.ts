@@ -5,10 +5,10 @@ import { checkerTexture, plywoodTexture, startBannerTexture } from '../render/te
 import { LevelBuilder } from '../world/LevelBuilder';
 import { ConeField } from './Cones';
 import { FootballField } from './Footballs';
-import { buildBoostPads, buildDeck, buildGlide, buildLoop, buildRamp, buildWalls, type BoostPads } from './TrackPieces';
+import { buildBoostPads, buildDeck, buildGlide, buildLoop, buildRamp, buildWalls, supportHeight, type BoostPads } from './TrackPieces';
 import type { Track } from './Track';
 import type { TrackFeature } from './trackData';
-import { buildBollards, buildMud, Sweeper } from './Obstacles';
+import { buildBollards, buildMud, buildStairway, Sweeper } from './Obstacles';
 
 const BARRIER = { length: 1.15, gap: 0.05, height: 0.55, base: 0.42, top: 0.14, clearance: 0.22 } as const;
 /** Height of the barriers' (invisible) collision fence, m. */
@@ -124,6 +124,15 @@ export function buildTrack(scene: THREE.Object3D, world: RAPIER.World, track: Tr
       }
       case 'gap':
         break;
+      case 'stairway': {
+        const a = new THREE.Vector3(...f.from), b = new THREE.Vector3(...f.to);
+        buildStairway(root, { from: a, to: b, width: f.width, steps: f.steps, ground: (x, y, z) => supportHeight(x, z, y) });
+        buildGlide(world, a, b, f.width);
+        const s0 = track.sAt(f.from), s1 = track.sAt(f.to);
+        buildWalls(world, track.span(s0, s1), f.width / 2 + 0.06, 1.2);
+        bumps.push({ s0, s1, pitch: f.hopPitch, strength: f.hopStrength });
+        break;
+      }
       case 'sweeper': {
         const smp = track.sampleAt(track.sAt(f.at));
         sweepers.push(new Sweeper(root, world, smp, f.speed, f.phase ?? 0));

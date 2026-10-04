@@ -163,3 +163,116 @@ export function buildBollards(root: THREE.Object3D, world: RAPIER.World, spots: 
   }
   return out;
 }
+
+/** Light, slightly worn stadium concrete. */
+function stairConcreteTexture(): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d')!;
+  g.fillStyle = '#c9c9c4';
+  g.fillRect(0, 0, 128, 128);
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < 900; i++) {
+    const v = 175 + Math.floor(rnd() * 50);
+    g.fillStyle = `rgba(${v},${v},${v - 4},0.35)`;
+    g.fillRect(rnd() * 128, rnd() * 128, 1 + rnd() * 2, 1 + rnd() * 2);
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+export interface StairwayOptions {
+  /** Top and bottom of the nose line (the line the step edges sit on). */
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  width: number;
+  steps: number;
+  /** Surface under a point (stand treads / ground), for the side skirts and rail posts. */
+  ground: (x: number, y: number, z: number) => number;
+}
+
+/**
+ * A concrete staircase built into a stand: real steps with yellow nosing strips, handrails on both
+ * sides and solid side skirts down to the treads below. Physics is separate (see TrackBuilder): a
+ * smooth glide slab on the nose line, stair-hop kicks and invisible walls.
+ */
+export function buildStairway(root: THREE.Object3D, o: StairwayOptions): void {
+  const { from, to, width, steps } = o;
+  const dirH = to.clone().sub(from).setY(0);
+  const run = dirH.length();
+  dirH.normalize();
+  const side = new THREE.Vector3(-dirH.z, 0, dirH.x); // left of travel (down the stairs)
+  const depth = run / (steps - 1);
+  const rise = (from.y - to.y) / (steps - 1);
+  const yaw = Math.atan2(dirH.x, dirH.z);
+  const treads: THREE.BufferGeometry[] = [];
+  const noses: THREE.BufferGeometry[] = [];
+  const at = (k: number) => from.clone().lerp(to, k / (steps - 1));
+  for (let k = 0; k < steps; k++) {
+    // Tread k: its nose on the line, extending one step back (uphill), a slab below it.
+    const nose = at(k);
+    const thick = rise + 0.25;
+    const centre = nose.clone().addScaledVector(dirH, -depth / 2);
+    centre.y -= thick / 2;
+    const box = new THREE.BoxGeometry(width, thick, depth + 0.01).rotateY(yaw).translate(centre.x, centre.y, centre.z);
+    treads.push(box);
+    const strip = new THREE.BoxGeometry(width - 0.1, 0.012, 0.05).rotateY(yaw);
+    const sp = nose.clone().addScaledVector(dirH, -0.03);
+    noses.push(strip.translate(sp.x, sp.y + 0.006, sp.z));
+  }
+  const concrete = new THREE.MeshStandardMaterial({ map: stairConcreteTexture(), roughness: 0.9 });
+  const stairs = new THREE.Mesh(mergeGeometries(treads)!, concrete);
+  stairs.castShadow = stairs.receiveShadow = true;
+  const strips = new THREE.Mesh(mergeGeometries(noses)!, new THREE.MeshStandardMaterial({ color: '#f2c21b', roughness: 0.6 }));
+  root.add(stairs, strips);
+
+  // Side skirts: from just above the nose line down to whatever is underneath.
+  const skirtPos: number[] = [];
+  const N = Math.max(2, Math.ceil(run / 0.5));
+  for (const sgn of [-1, 1]) {
+    for (let i = 0; i < N; i++) {
+      const pts = [i / N, (i + 1) / N].map((t) => {
+        const top = from.clone().lerp(to, t).addScaledVector(side, (sgn * width) / 2);
+        top.y += 0.04;
+        const bottom = top.clone();
+        bottom.y = Math.min(top.y - 0.3, o.ground(top.x, top.y - 0.3, top.z) - 0.05);
+        return [top, bottom];
+      });
+      const [[a0, b0], [a1, b1]] = pts;
+      skirtPos.push(...a0.toArray(), ...b0.toArray(), ...b1.toArray(), ...a0.toArray(), ...b1.toArray(), ...a1.toArray());
+    }
+  }
+  const skirtGeo = new THREE.BufferGeometry();
+  skirtGeo.setAttribute('position', new THREE.Float32BufferAttribute(skirtPos, 3));
+  skirtGeo.computeVertexNormals();
+  const skirt = new THREE.Mesh(skirtGeo, new THREE.MeshStandardMaterial({ color: '#bdbdb7', roughness: 0.9, side: THREE.DoubleSide }));
+  skirt.castShadow = skirt.receiveShadow = true;
+  root.add(skirt);
+
+  // Handrails: posts every ~1.4 m, a top rail and a mid rail parallel to the nose line.
+  const rails: THREE.BufferGeometry[] = [];
+  const tube = (a: THREE.Vector3, b: THREE.Vector3, r: number) => {
+    const len = a.distanceTo(b);
+    const g = new THREE.CylinderGeometry(r, r, len, 8);
+    g.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), b.clone().sub(a).normalize()));
+    const mid = a.clone().add(b).multiplyScalar(0.5);
+    return g.translate(mid.x, mid.y, mid.z);
+  };
+  const posts = Math.max(2, Math.round(run / 1.4) + 1);
+  for (const sgn of [-1, 1]) {
+    const off = side.clone().multiplyScalar(sgn * (width / 2 + 0.04));
+    const top0 = from.clone().add(off), top1 = to.clone().add(off);
+    rails.push(tube(top0.clone().setY(top0.y + 0.9), top1.clone().setY(top1.y + 0.9), 0.022));
+    rails.push(tube(top0.clone().setY(top0.y + 0.45), top1.clone().setY(top1.y + 0.45), 0.014));
+    for (let i = 0; i < posts; i++) {
+      const p = from.clone().lerp(to, i / (posts - 1)).add(off);
+      rails.push(tube(p, p.clone().setY(p.y + 0.9), 0.018));
+    }
+  }
+  const railMesh = new THREE.Mesh(mergeGeometries(rails)!, new THREE.MeshStandardMaterial({ color: '#c8ccd0', metalness: 0.8, roughness: 0.3 }));
+  railMesh.castShadow = true;
+  root.add(railMesh);
+}

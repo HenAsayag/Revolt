@@ -1,7 +1,7 @@
 export type Difficulty = 'easy' | 'normal' | 'hard';
 
 export interface Settings {
-  track: 'tour' | 'classic';
+  track: 'tour' | 'stairs' | 'classic';
   laps: number;
   /** Smart steering: helps follow the track and keeps you off the walls. */
   assist: boolean;
@@ -24,7 +24,7 @@ export function loadSettings(): Settings {
       const s = { ...DEFAULTS, ...JSON.parse(raw) } as Settings;
       if (![1, 3, 5].includes(s.laps)) s.laps = 3;
       if (!['easy', 'normal', 'hard'].includes(s.difficulty)) s.difficulty = 'normal';
-      if (s.track !== 'tour' && s.track !== 'classic') s.track = 'tour';
+      if (!['tour', 'stairs', 'classic'].includes(s.track)) s.track = 'tour';
       if (s.rivals !== 'invisible' && s.rivals !== 'visible') s.rivals = 'invisible';
       return s;
     }
@@ -74,7 +74,7 @@ export class Menu {
         <div class="menu-tag">Toy-car racing around the stadium</div>
         <button class="menu-btn primary" data-act="start" data-row>RACE!</button>
         <div class="menu-opts">
-          ${seg('Track', 'track', [['tour', 'Stadium Tour'], ['classic', 'Pitch Circuit']])}
+          ${seg('Track', 'track', [['tour', 'Stadium Tour'], ['stairs', 'Stair Run'], ['classic', 'Pitch Circuit']])}
           ${seg('Laps', 'laps', [['1', '1'], ['3', '3'], ['5', '5']])}
           ${seg('Steering', 'assist', [['on', 'Assisted'], ['off', 'Pro']])}
           ${seg('Opponents', 'rivals', [['invisible', 'Invisible'], ['visible', 'Visible']])}

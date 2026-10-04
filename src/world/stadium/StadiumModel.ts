@@ -114,6 +114,31 @@ export interface InstalledStadium {
   root: THREE.Group;
   screens: THREE.Mesh[];
   seatCount: number;
+  seats: THREE.Group;
+}
+
+/** Hide every seat whose position falls inside one of the [x0, z0, x1, z1] rectangles (under track pieces). */
+export function clearSeats(seats: THREE.Group, rects: [number, number, number, number][]): number {
+  if (!rects.length) return 0;
+  const m = new THREE.Matrix4();
+  const p = new THREE.Vector3();
+  const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+  let cleared = 0;
+  for (const child of seats.children) {
+    const mesh = child as THREE.InstancedMesh;
+    let touched = false;
+    for (let i = 0; i < mesh.count; i++) {
+      mesh.getMatrixAt(i, m);
+      p.setFromMatrixPosition(m);
+      if (rects.some(([x0, z0, x1, z1]) => p.x >= x0 && p.x <= x1 && p.z >= z0 && p.z <= z1)) {
+        mesh.setMatrixAt(i, zero);
+        touched = true;
+        cleared++;
+      }
+    }
+    if (touched) mesh.instanceMatrix.needsUpdate = true;
+  }
+  return cleared;
 }
 
 /** Tune the model's materials for the game's lighting and add it (plus colliders and seats) to the scene. */
@@ -166,5 +191,5 @@ export function installStadiumModel(
   const seats = buildSeats(assets.seats);
   root.add(seats);
   const seatCount = seats.children.reduce((n, m) => n + (m as THREE.InstancedMesh).count, 0);
-  return { root, screens, seatCount };
+  return { root, screens, seatCount, seats };
 }

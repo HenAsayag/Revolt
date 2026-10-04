@@ -3,7 +3,7 @@
 Toy RC-car racing inside Bloomfield Stadium (Tel Aviv). Vite + TypeScript + three.js + Rapier.
 **Play it:** https://henasayag.github.io/Revolt/ (desktop, gamepad or phone — turn it sideways).
 
-You against 7 AI rivals over 1, 3 or 5 laps on two tracks:
+You against 7 AI rivals over 1, 3 or 5 laps on three tracks:
 
 - **Stadium Tour** (default, 4.4 m wide on the grass): the grid sits on a plywood deck high in the
   South stand, with a bollard slalom straight after the line; plunge down over the seats onto the
@@ -11,6 +11,10 @@ You against 7 AI rivals over 1, 3 or 5 laps on two tracks:
   north sweep, run past the goal, climb a curving ramp into the East stand, race a 90 m balcony over
   the crowd — and clear its gap jump, 7 m above the seats — then swing through the corner over the
   seats and back onto the South stand.
+- **Stair Run**: the start line is the top step of a 47-step concrete staircase built into the East
+  stand (the seats under it removed); bounce down it onto the pitch, sweep diagonally across the
+  field past a sweeper arm, U-turn by the south goal, loop in front of the main stand, run past the
+  north goal and climb back up the stand to a hairpin over the top rows.
 - **Pitch Circuit** (the original): kicker, footballs, a ramp over the East stand, stair hops down an
   aisle, a ski jump and the loop.
 
@@ -35,7 +39,7 @@ from the icon for a real fullscreen, landscape game (web-app manifest + icons in
 regenerate the icons with `node tools/make-icons.mjs`).
 
 URL options: `?skip=1` (straight to the menu), `?touch=1` / `?touch=0` force the on-screen controls, `?quality=low|high`,
-`?track=tour|classic`.
+`?track=tour|stairs|classic`.
 
 **Steering: Assisted** (default) follows the curve when you're not steering and eases you off the
 walls; **Pro** is raw. **Opponents: Invisible** (default) — the AI still race and rank, but you can't
@@ -118,6 +122,7 @@ src/
   track/
     trackData.ts          ← the Pitch Circuit: spline control points + features by world position
     tourData.ts           ← the Stadium Tour (heights over the stands surveyed from the collision mesh)
+    stairData.ts          ← the Stair Run (staircase, climb and hairpin between the East-stand aisles)
     tracks.ts             track registry (menu choice)
     Track.ts              sampled closed spline: frames, width, projection, grid slots
     TrackBuilder.ts       water barriers, kickers, start line/gantry/grid, features → pieces
